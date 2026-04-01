@@ -1,207 +1,182 @@
 # Harness Engineering
 
-> **Agent-first repository harness** - 基于 OpenAI Harness Engineering 方法论的仓库改造工具
+> 把你的仓库改造成 AI agent 可以持续、高效工作的环境
 
 ## 核心理念
 
-**"Humans steer. Agents execute."**（人类掌舵，智能体执行）
+**"Humans steer. Agents execute."**（人类掌舵，Agent 执行）
 
-这不是一个"零人工干预的自动化框架"，而是一套**改造仓库和环境**的方法论，让 AI agent 能够在你的特定仓库中持续、高效地工作。
+基于 [OpenAI Harness Engineering](https://openai.com/index/harness-engineering/) 方法论。核心不是"零人工干预"，而是：
 
-### 什么是 Harness Engineering？
+- 人类负责：目标、验收标准、架构决策、最终合并
+- Agent 负责：写代码、跑测试、开 PR、响应 review
 
-Harness Engineering 是 OpenAI 提出的一种工程实践，核心思想是：
+这个工具帮你把仓库改造成"agent 友好"的状态，然后 Claude Code 或 Codex 进来就能直接高效工作。
 
-- **人类始终在环**（Humans always remain in the loop）
-- 人类负责：目标设定、优先级、验收标准、架构决策、风险判断
-- Agent 负责：编写代码、运行测试、创建 PR、响应 review、修复问题
-- **不是通用框架**：每个仓库需要根据自身特点进行定制化改造
-
-### 与传统开发的区别
-
-**传统开发**：
-```
-人类 → 写代码 → 测试 → PR → Review → 合并
-```
-
-**Harness Engineering**：
-```
-人类 → 定义目标 → Agent 写代码 → Agent 测试 → Agent 开 PR
-→ Agent 响应 review → 人类验收 → 合并
-```
-
-人类从"写代码"提升到"定义目标和验收标准"的抽象层。
+---
 
 ## 快速开始
-
-### 1. 初始化仓库 Harness
 
 ```bash
 # 安装
 curl -fsSL https://raw.githubusercontent.com/PIGU-PPPgu/harness-skill-v2/main/install.sh | bash
 
-# 在你的项目中初始化
+# 在你的项目里初始化
 cd your-project
 harness init
 ```
 
-这会创建：
+`harness init` 会生成：
+
 ```
-.harness/
-├── docs/
-│   ├── architecture/      # 架构文档
-│   ├── product/          # 产品需求
-│   ├── quality/          # 质量标准
-│   └── plans/            # 执行计划
-├── config.json           # Harness 配置
-└── constraints/          # 约束规则
+your-project/
+├── CLAUDE.md                    ← Claude Code 入口文件
+├── AGENTS.md                    ← Codex / OpenAI 入口文件
+└── .harness/
+    ├── config.json              ← 项目配置（自动检测项目类型）
+    └── docs/
+        ├── architecture/        ← 填写你的系统架构
+        ├── product/             ← 填写你的产品需求
+        ├── quality/             ← 已预填测试和 lint 命令
+        ├── security/            ← 已预填安全规范
+        └── plans/
+            ├── active/          ← 当前执行计划（JSON）
+            └── completed/       ← 已完成的计划
 ```
 
-### 2. 编写结构化文档
+---
 
-Agent 需要清晰的仓库文档才能有效工作。
+## 工作流
 
-### 3. 定义执行计划
+### 第一步：填写文档
 
-创建清晰的执行计划，包含目标、验收标准和技术约束。
-
-### 4. 启动 Agent 工作循环
+初始化后，填写关键文档：
 
 ```bash
-harness run
+# 最重要的两个文件
+vim CLAUDE.md                                    # 描述项目、运行方式、架构约束
+vim .harness/docs/architecture/overview.md       # 系统设计
+vim .harness/docs/product/requirements.md        # 当前要做什么
 ```
 
-## 核心功能
+文档越清晰，agent 工作越准确。
 
-### 1. 结构化知识系统
+### 第二步：创建执行计划
 
-将仓库知识结构化，让 agent 能快速理解。
+```bash
+harness plan create "实现用户认证" "添加 JWT 认证，保护 API 接口"
+# 输出: Created execution plan: EP-20260401-120000
+```
 
-### 2. 可执行环境
+### 第三步：让 Agent 工作
 
-Agent 需要能够启动和验证应用。
+直接用 Claude Code 或 Codex，它们会自动读取 `CLAUDE.md` / `AGENTS.md`：
 
-### 3. 机械化约束
+```bash
+# Claude Code
+claude
 
-将质量标准转化为可执行的检查。
+# Codex
+codex
+```
 
-### 4. 执行计划管理
+Agent 会：
+1. 读取 `CLAUDE.md` 和 `.harness/docs/` 理解仓库
+2. 读取 `plans/active/` 知道当前任务
+3. 创建分支、写代码、跑测试
+4. 开 PR，等待 review
 
-管理和跟踪执行计划的生命周期。
+### 第四步：质量验收
 
-### 5. PR 工作流
+```bash
+harness check              # 跑 lint + 类型检查 + 测试 + 文档完整性检查
+harness check --only test  # 只跑测试
+harness check --json       # JSON 输出（适合 CI）
+```
 
-Agent 创建 PR、响应 review、修复问题。
+通过后合并 PR。
 
-### 6. 持续清理
+---
 
-Agent 会复制坏模式，需要持续清理。
+## 命令参考
 
-## 配置
+| 命令 | 说明 |
+|------|------|
+| `harness init` | 初始化项目，生成 CLAUDE.md、AGENTS.md 和文档骨架 |
+| `harness plan create <title> <desc>` | 创建执行计划 |
+| `harness check` | 运行所有质量检查 |
+| `harness check --only lint` | 只跑 lint |
+| `harness check --only test` | 只跑测试 |
+| `harness check --json` | JSON 格式输出（CI 用） |
+| `harness run [plan_id]` | 启动 agent 主循环（需要 ANTHROPIC_API_KEY） |
 
-详见 `.harness/config.json`
+---
 
-## 工作流示例
+## 支持的项目类型
 
-### 场景 1: 新功能开发
+`harness init` 自动检测项目类型，`harness check` 自动选择对应命令：
 
-1. 人类：创建执行计划
-2. Agent：执行开发
-3. 人类：Review PR
-4. 人类：提供反馈
-5. Agent：响应反馈
-6. 人类：验收并合并
+| 类型 | 检测方式 | Lint | 测试 |
+|------|---------|------|------|
+| Next.js | `package.json` + `next` 依赖 | `npm run lint` | `npx vitest run` |
+| Node.js | `package.json` | `npm run lint` | `npm test` |
+| Python | `pyproject.toml` / `setup.py` | `ruff check .` | `pytest` |
+| Go | `go.mod` | `go vet ./...` | `go test ./...` |
+| Rust | `Cargo.toml` | `cargo clippy` | `cargo test` |
 
-### 场景 2: Bug 修复
+---
 
-1. 人类：创建 bug 报告
-2. Agent：调查和修复
-3. 人类：验证修复
-4. 人类：合并
+## 为什么这样设计
 
-### 场景 3: 代码重构
+### 不是"零人工干预"
 
-1. 人类：定义重构目标
-2. Agent：执行重构
-3. 人类：验证性能
-4. 人类：合并
+OpenAI 原文明确写了 "Humans always remain in the loop"。Agent 能做的是承担大部分编码工作，但人类仍然负责目标定义、架构决策和最终验收。
 
-## 最佳实践
+### 不是通用 Agent Runtime
 
-### 1. 文档驱动
+Claude Code 和 Codex 本身就是 agent runtime，而且比任何自制方案都强。我们做的是把仓库改造成"agent 友好"的状态——结构化文档、清晰的执行计划、机械化的质量约束。
 
-编写清晰、结构化的文档。
+### 不是固定角色流水线
 
-### 2. 渐进式改造
+原文没有"七角色流水线"。是单主循环：读文档 → 理解任务 → 写代码 → 验证 → 开 PR。
 
-不要一次性改造整个仓库，从一个模块开始。
+---
 
-### 3. 持续验证
+## CI 集成
 
-每次 PR 前运行完整检查。
+```yaml
+# .github/workflows/harness-check.yml
+name: Harness Check
+on: [pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install harness
+        run: curl -fsSL https://raw.githubusercontent.com/PIGU-PPPgu/harness-skill-v2/main/install.sh | bash
+      - name: Run checks
+        run: harness check --json
+```
 
-### 4. 人类监督
+---
 
-**何时需要人类介入**：
-- 架构决策
-- 安全审查
-- 性能优化
-- 用户体验
-- 风险评估
+## 实现状态
 
-**Agent 可以自主处理**：
-- 编写代码
-- 运行测试
-- 修复 lint 错误
-- 响应 review 评论
-- 更新文档
-- 重构重复代码
+- ✅ `harness init` — 生成 CLAUDE.md、AGENTS.md、文档骨架，自动检测项目类型
+- ✅ `harness plan create` — 创建执行计划（JSON，带任务状态机）
+- ✅ `harness check` — 真实运行 lint/typecheck/test，文档完整性检查
+- ✅ `harness run` — agent 主循环框架（Git 集成就绪，AI 调用待接入）
+- ⏳ AI 模型直接调用（当前需要用户自己用 Claude Code / Codex）
 
-### 5. 反馈循环
+---
 
-持续提供反馈，帮助 agent 改进。
+## 参考
 
-## 限制和注意事项
-
-### 这不是银弹
-
-Harness Engineering **不能**：
-- 替代人类的判断和决策
-- 自动理解模糊的需求
-- 处理所有边界情况
-- 保证零 bug
-- 替代代码 review
-
-### 适用场景
-
-**适合**：
-- 结构清晰的仓库
-- 有完善测试的项目
-- 需求明确的功能
-- 重复性的重构工作
-
-**不适合**：
-- 全新项目（缺少结构）
-- 需求不明确
-- 复杂的架构决策
-- 需要大量用户反馈的功能
-
-### 成本考虑
-
-- Agent 调用 API 有成本
-- 需要维护文档和约束
-- 初期改造需要投入时间
-- 需要持续监督和反馈
-
-## 参考资料
-
-- [OpenAI: Harness Engineering](https://openai.com/index/harness-engineering/)
-- [OpenAI: Introducing Codex](https://openai.com/index/introducing-codex/)
+- [OpenAI: Harness Engineering](https://openai.com/index/harness-engineering/)（2026-02-11）
+- [CHANGELOG.md](CHANGELOG.md) — 记录了误读和纠正过程
+- [IMPLEMENTATION.md](IMPLEMENTATION.md) — 详细实现进度
 
 ## 许可证
 
 MIT License
-
----
-
-**记住**：Harness Engineering 的核心是"Humans steer. Agents execute."，不是"零人工干预"。
