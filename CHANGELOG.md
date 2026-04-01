@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.1.0] - 2024-04-01
+## [2.1.0] - 2026-04-01
 
 ### 🔄 重大重构 - 回归 OpenAI 原文精神
 
@@ -17,10 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **README**：完全重写，纠正对 OpenAI 原文的误读
 - **文档**：去除所有"零干预""全自动"等误导性表述
 
-### Removed
-- 移除"7 个智能体角色"的固定流水线设计
-- 移除"PRD 驱动全自动开发"的不切实际承诺
-- 移除所有与 OpenAI 原文不符的功能声称
+### 重构进行中（实现层尚未完成）
+- 顶层定位已重写，但 CLI 实现仍在重构中
+- 旧的 `swarm/tasks/agent` 命令体系正在被替换为单主循环
+- examples/ 目录的旧示例待更新
+
+### 已开始实现
+- `src/harness_runtime.py`：真正的执行计划管理和 Git 集成
+- `src/agent_loop.py`：单主循环 agent 框架
+- `harness run`：新的主入口命令（替代 `swarm start`）
+- `harness plan create`：创建执行计划
 
 ### 核心发现（来自 Codex 评估）
 
@@ -53,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 5. Execution plan 作为一等公民
 6. 持续 garbage collection
 
-## [2.0.0] - 2024-01-15
+## [2.0.0] - 2026-01-15
 
 ### Added
 - 零干预智能体团队系统（已证实为误读）
@@ -88,7 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **注**：以上功能大部分是空壳实现，不执行真实操作。
 
-## [1.0.0] - 2024-01-01
+## [1.0.0] - 2025-12-01
 
 ### Added
 - 初始版本
