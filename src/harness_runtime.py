@@ -82,24 +82,19 @@ class HarnessRuntime:
             self.harness_dir / "constraints",
             self.harness_dir / "logs",
         ]
-
         for dir_path in dirs:
             dir_path.mkdir(parents=True, exist_ok=True)
+
+        # 检测项目类型
+        project_type = self._detect_project_type()
 
         # 创建配置文件
         config_file = self.harness_dir / "config.json"
         if not config_file.exists():
             config = {
                 "version": "2.1.0",
-                "model": {
-                    "provider": "anthropic",
-                    "model": "claude-3-5-sonnet-20241022",
-                    "api_key_env": "ANTHROPIC_API_KEY"
-                },
-                "git": {
-                    "main_branch": "main",
-                    "pr_template": ".harness/templates/pr_template.md"
-                },
+                "project_type": project_type,
+                "git": {"main_branch": "main"},
                 "quality": {
                     "min_coverage": 80,
                     "lint_on_commit": True,
@@ -108,27 +103,325 @@ class HarnessRuntime:
             }
             config_file.write_text(json.dumps(config, indent=2))
 
-        # 创建入口文档
-        readme = self.docs_dir / "README.md"
-        if not readme.exists():
-            readme.write_text("""# Repository Documentation
+        # 生成所有模板文件
+        self._write_if_missing(Path("CLAUDE.md"), self._tmpl_claude_md())
+        self._write_if_missing(Path("AGENTS.md"), self._tmpl_agents_md())
+        self._write_if_missing(self.docs_dir / "README.md", self._tmpl_docs_readme())
+        self._write_if_missing(self.docs_dir / "architecture" / "overview.md", self._tmpl_architecture())
+        self._write_if_missing(self.docs_dir / "product" / "requirements.md", self._tmpl_product())
+        self._write_if_missing(self.docs_dir / "quality" / "standards.md", self._tmpl_quality(project_type))
+        self._write_if_missing(self.docs_dir / "security" / "guidelines.md", self._tmpl_security())
 
-## Quick Links
-- [Architecture](architecture/) - System design and technical decisions
-- [Product](product/) - Product requirements and specifications
-- [Quality](quality/) - Quality standards and testing strategy
-- [Security](security/) - Security requirements and guidelines
-- [Plans](plans/) - Execution plans (active and completed)
+        print("✓ Harness initialized")
+        print()
+        print("Generated files:")
+        print("  CLAUDE.md          ← Claude Code entry point")
+        print("  AGENTS.md          ← Codex / OpenAI entry point")
+        print("  .harness/docs/     ← Structured knowledge system")
+        print("    architecture/    ← Fill in your system design")
+        print("    product/         ← Fill in your requirements")
+        print("    quality/         ← Pre-filled with standards")
+        print("    security/        ← Pre-filled with guidelines")
+        print("    plans/active/    ← Execution plans go here")
+        print()
+        print("Next steps:")
+        print("  1. Edit CLAUDE.md and AGENTS.md with your project specifics")
+        print("  2. Fill in .harness/docs/architecture/overview.md")
+        print("  3. Write your first requirement in .harness/docs/product/requirements.md")
+        print("  4. Run: harness plan create '<title>' '<description>'")
 
-## How to Use
-This documentation is structured for AI agents to quickly understand the codebase.
-Keep it concise, up-to-date, and focused on what agents need to know.
-""")
+    def _detect_project_type(self) -> str:
+        """检测项目类型"""
+        cwd = Path(".")
+        if (cwd / "package.json").exists():
+            pkg = json.loads((cwd / "package.json").read_text())
+            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+            if "next" in deps:
+                return "nextjs"
+            if "react" in deps:
+                return "react"
+            return "node"
+        if (cwd / "pyproject.toml").exists() or (cwd / "setup.py").exists():
+            return "python"
+        if (cwd / "go.mod").exists():
+            return "go"
+        if (cwd / "Cargo.toml").exists():
+            return "rust"
+        return "generic"
 
-        print("✓ Harness structure initialized")
-        print(f"  - Documentation: {self.docs_dir}")
-        print(f"  - Plans: {self.plans_dir}")
-        print(f"  - Config: {config_file}")
+    def _write_if_missing(self, path: Path, content: str) -> None:
+        if not path.exists():
+            path.write_text(content)
+
+    def _tmpl_claude_md(self) -> str:
+        return """# CLAUDE.md — Agent Entry Point
+
+> This file is auto-loaded by Claude Code. Keep it concise and up-to-date.
+
+## Repository Overview
+
+<!-- TODO: 1-2 sentences describing what this repo does -->
+
+## Tech Stack
+
+<!-- TODO: List main technologies, e.g.:
+- Runtime: Node.js 20 / Python 3.12 / Go 1.22
+- Framework: Next.js 14 / FastAPI / Gin
+- Database: PostgreSQL via Supabase
+- Testing: Vitest / pytest / go test
+-->
+
+## How to Run
+
+```bash
+# Install dependencies
+# TODO: e.g. npm install / pip install -e . / go mod download
+
+# Start dev server
+# TODO: e.g. npm run dev / uvicorn main:app --reload
+
+# Run tests
+# TODO: e.g. npm test / pytest / go test ./...
+
+# Lint
+# TODO: e.g. npm run lint / ruff check . / golangci-lint run
+```
+
+## Architecture
+
+See `.harness/docs/architecture/overview.md` for full details.
+
+Key constraint: <!-- TODO: e.g. "Never import from ui/ into service/" -->
+
+## Active Work
+
+See `.harness/docs/plans/active/` for current execution plans.
+
+## Agent Guidelines
+
+- Read `.harness/docs/` before starting any task
+- Create a branch per task: `harness/<plan-id>-<task-id>`
+- Run tests before creating a PR
+- If blocked or uncertain about architecture decisions, stop and ask the human
+- Update `.harness/docs/plans/active/<plan>.json` task status as you work
+"""
+
+    def _tmpl_agents_md(self) -> str:
+        return """# AGENTS.md — Agent Entry Point (Codex / OpenAI)
+
+> This file is the entry point for OpenAI Codex and other agents.
+
+## What This Repo Does
+
+<!-- TODO: 1-2 sentences -->
+
+## Setup
+
+```bash
+# TODO: commands to install and run
+```
+
+## Testing
+
+```bash
+# TODO: command to run tests
+# All tests must pass before submitting a PR
+```
+
+## Code Style
+
+<!-- TODO: key conventions, e.g.:
+- Use TypeScript strict mode
+- No `any` types
+- Functions under 50 lines
+-->
+
+## Repository Knowledge
+
+Structured documentation lives in `.harness/docs/`:
+- `architecture/overview.md` — system design
+- `product/requirements.md` — what we're building
+- `quality/standards.md` — quality bar
+- `plans/active/` — current execution plans (JSON)
+
+## Constraints
+
+<!-- TODO: hard rules the agent must not violate, e.g.:
+- Never commit secrets or API keys
+- Never modify migration files directly
+- Always add tests for new functionality
+-->
+
+## When to Stop and Ask
+
+- Architecture decisions that affect multiple modules
+- Security-sensitive changes
+- Anything that requires production access
+"""
+
+    def _tmpl_docs_readme(self) -> str:
+        return """# Repository Documentation
+
+This directory is the structured knowledge system for AI agents.
+Keep it concise, accurate, and up-to-date.
+
+## Contents
+
+| Directory | Purpose |
+|-----------|---------|
+| `architecture/` | System design, data models, dependency rules |
+| `product/` | Requirements, acceptance criteria, user stories |
+| `quality/` | Testing strategy, coverage requirements, lint rules |
+| `security/` | Auth model, data handling, threat model |
+| `plans/active/` | Current execution plans (JSON) |
+| `plans/completed/` | Finished execution plans (for reference) |
+
+## Maintenance
+
+- Update `architecture/overview.md` after any structural change
+- Move plans from `active/` to `completed/` when done
+- Keep each file under 200 lines — link out rather than inline
+"""
+
+    def _tmpl_architecture(self) -> str:
+        return """# Architecture Overview
+
+<!-- TODO: Fill this in. This is the most important file for agents. -->
+
+## System Diagram
+
+```
+<!-- ASCII diagram of your system -->
+```
+
+## Key Components
+
+| Component | Responsibility | Location |
+|-----------|---------------|----------|
+| <!-- TODO --> | | |
+
+## Data Model
+
+<!-- TODO: Key entities and their relationships -->
+
+## Dependency Rules
+
+<!-- TODO: What can import what? e.g.:
+- `ui/` can import from `services/` and `types/`
+- `services/` cannot import from `ui/`
+- No circular dependencies
+-->
+
+## Key Decisions
+
+<!-- TODO: Important architectural decisions and why they were made -->
+"""
+
+    def _tmpl_product(self) -> str:
+        return """# Product Requirements
+
+<!-- TODO: Fill in your current requirements -->
+
+## Current Goals
+
+<!-- What are we building right now? -->
+
+## Acceptance Criteria
+
+<!-- What does "done" look like? Be specific and testable.
+- [ ] Criterion 1
+- [ ] Criterion 2
+-->
+
+## Out of Scope
+
+<!-- What are we explicitly NOT doing? -->
+
+## User Stories
+
+<!-- Optional: who uses this and what do they need? -->
+"""
+
+    def _tmpl_quality(self, project_type: str) -> str:
+        test_cmd = {
+            "nextjs": "npm test -- --run",
+            "react": "npm test -- --run",
+            "node": "npm test",
+            "python": "pytest",
+            "go": "go test ./...",
+            "rust": "cargo test",
+        }.get(project_type, "# TODO: add test command")
+
+        lint_cmd = {
+            "nextjs": "npm run lint",
+            "react": "npm run lint",
+            "node": "npm run lint",
+            "python": "ruff check .",
+            "go": "golangci-lint run",
+            "rust": "cargo clippy",
+        }.get(project_type, "# TODO: add lint command")
+
+        return f"""# Quality Standards
+
+## Test Command
+
+```bash
+{test_cmd}
+```
+
+## Lint Command
+
+```bash
+{lint_cmd}
+```
+
+## Requirements
+
+- Minimum test coverage: 80%
+- All tests must pass before PR
+- No lint errors
+- No type errors (if applicable)
+
+## Test Strategy
+
+- Unit tests for pure functions and business logic
+- Integration tests for API endpoints
+- Do NOT mock the database in integration tests
+
+## Definition of Done
+
+A task is done when:
+1. Feature works as described in acceptance criteria
+2. Tests written and passing
+3. No new lint errors
+4. PR created with description of changes
+"""
+
+    def _tmpl_security(self) -> str:
+        return """# Security Guidelines
+
+## Authentication
+
+<!-- TODO: How does auth work in this system? -->
+
+## Data Handling
+
+- Never log sensitive data (passwords, tokens, PII)
+- Validate all user input at system boundaries
+- Use parameterized queries (no string interpolation in SQL)
+
+## Secrets
+
+- Never commit secrets or API keys
+- Use environment variables for all credentials
+- See `.env.example` for required variables
+
+## Agent Constraints
+
+- Agents must not access production databases directly
+- Agents must not modify auth/security code without human review
+- Any change to permission models requires human approval
+"""
 
     def create_plan(self, title: str, description: str) -> ExecutionPlan:
         """创建执行计划"""
