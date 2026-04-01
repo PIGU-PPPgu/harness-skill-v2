@@ -8,6 +8,7 @@ HARNESS_DIR=".harness"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_RUNTIME="$SCRIPT_DIR/src/harness_runtime.py"
 AGENT_LOOP="$SCRIPT_DIR/src/agent_loop.py"
+HARNESS_CHECK="$SCRIPT_DIR/src/harness_check.py"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -278,28 +279,26 @@ cmd_agent_logs() {
     fi
 }
 
-# 质量审计
+# 真实的质量检查
+cmd_check() {
+    local args=()
+    while [[ $# -gt 0 ]]; do
+        args+=("$1")
+        shift
+    done
+
+    if [ ! -f "$HARNESS_CHECK" ]; then
+        log_error "harness_check.py not found: $HARNESS_CHECK"
+        exit 1
+    fi
+
+    python3 "$HARNESS_CHECK" "${args[@]}"
+}
+
+# 质量审计（兼容旧命令，调用 check）
 cmd_audit() {
-    log_info "执行质量审计..."
-
-    # 检查测试覆盖率
-    log_info "检查测试覆盖率..."
-    echo "  ✓ 单元测试覆盖率: 87% (目标: 80%)"
-
-    # 检查代码质量
-    log_info "检查代码质量..."
-    echo "  ✓ Lint 错误: 0"
-    echo "  ✓ 类型错误: 0"
-
-    # 检查架构约束
-    log_info "检查架构约束..."
-    echo "  ✓ 无架构违规"
-
-    # 检查性能指标
-    log_info "检查性能指标..."
-    echo "  ✓ API 响应时间: 45ms (目标: <100ms)"
-
-    log_success "质量审计通过"
+    log_warning "⚠️  'audit' 已废弃，请使用 'harness check'"
+    cmd_check "$@"
 }
 
 # 架构约束检查
@@ -389,8 +388,13 @@ Harness Engineering v$VERSION - Agent-first Repository Harness
   task show <id>                    查看任务详情
 
 质量命令:
-  audit                             执行质量审计
-  enforce [--check]                 检查/强制架构约束
+  check                             运行所有质量检查（lint + typecheck + test + docs）
+  check --only lint                 只跑 lint
+  check --only typecheck            只跑类型检查
+  check --only test                 只跑测试
+  check --only harness-docs         只检查文档完整性
+  check --skip test                 跳过测试
+  check --json                      输出 JSON 报告（适合 CI）
 
 工作流示例:
   # 1. 初始化项目
@@ -460,6 +464,10 @@ main() {
         run)
             shift
             cmd_run "$@"
+            ;;
+        check)
+            shift
+            cmd_check "$@"
             ;;
         swarm)
             shift
