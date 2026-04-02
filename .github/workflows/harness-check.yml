@@ -22,6 +22,7 @@ jobs:
           echo "$PWD" >> $GITHUB_PATH
 
       - name: harness check
-        run: harness check --json
+        # Skip harness-docs: this repo is the tool itself, not a project using it
+        run: harness check --skip harness-docs --json
         env:
           CI: true
