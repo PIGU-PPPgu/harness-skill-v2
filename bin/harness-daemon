@@ -16,7 +16,7 @@ DAEMON_LOCK_FILE="$STATE_DIR/daemon.lock"
 DAEMON_HEALTH_FILE="$STATE_DIR/daemon-heartbeat.json"
 DAEMON_ACTIVITY_FILE="$STATE_DIR/daemon-last-activity.txt"
 
-COMPONENT="agent-daemon"
+COMPONENT="harness-daemon"
 CHECK_INTERVAL=10
 SESSION_TIMEOUT_SECONDS=$((30 * 60))
 LOCK_WAIT_SECONDS=30
@@ -29,7 +29,7 @@ usage() {
   cat << EOF
 Agent Daemon - Autonomous Agent Execution
 
-Usage: agent-daemon <command>
+Usage: harness-daemon <command>
 
 Commands:
   start       Start the daemon (background)
@@ -575,7 +575,7 @@ notify_escalation() {
   local role="$2"
   local reason="$3"
 
-  local msg="🚨 Agent Swarm 需要人工介入\n任务: $task_id\nAgent: $role\n原因: $reason"
+  local msg="🚨 Harness 需要人工介入\n任务: $task_id\nAgent: $role\n原因: $reason"
   error "escalation_required" "$msg"
 
   # Write escalation marker for external monitoring

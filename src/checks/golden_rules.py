@@ -29,10 +29,12 @@ class GoldenRulesReport:
 
 
 def _grep(pattern: str, path: Path, include: List[str] = None) -> List[str]:
-    cmd = ["grep", "-r", pattern, str(path)]
+    # --include must come before the path for portability (GNU grep & BSD grep)
+    cmd = ["grep", "-r"]
     if include:
         for ext in include:
             cmd += ["--include", ext]
+    cmd += [pattern, str(path)]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
         return [l for l in result.stdout.splitlines() if l.strip()]

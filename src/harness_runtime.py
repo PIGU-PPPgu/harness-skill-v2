@@ -92,7 +92,7 @@ class HarnessRuntime:
         config_file = self.harness_dir / "config.json"
         if not config_file.exists():
             config = {
-                "version": "2.1.0",
+                "version": "2.2.0",
                 "project_type": project_type,
                 "git": {"main_branch": "main"},
                 "quality": {
@@ -575,11 +575,16 @@ A task is done when:
             pr_url = result.stdout.strip()
             print(f"✓ Created PR: {pr_url}")
             return pr_url
-        except subprocess.CalledProcessError:
-            # 如果 gh CLI 不可用，返回占位符
-            pr_url = f"https://github.com/owner/repo/pull/placeholder"
-            print(f"⚠ gh CLI not available, PR creation skipped")
-            return pr_url
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"gh CLI failed to create PR: {e.stderr}\n"
+                "Make sure 'gh' is installed and authenticated: gh auth login"
+            )
+        except FileNotFoundError:
+            raise RuntimeError(
+                "gh CLI not found. Install it: https://cli.github.com\n"
+                "Then authenticate: gh auth login"
+            )
 
 
 def main():

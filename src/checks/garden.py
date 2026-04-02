@@ -25,7 +25,8 @@ class GardenReport:
 
     @property
     def passed(self) -> bool:
-        return not any(i.severity == "error" for i in self.issues)
+        # warn issues still count as failures — garden is a blocking check
+        return len(self.issues) == 0
 
 
 def check_docs(cwd: Path, report: GardenReport) -> None:
