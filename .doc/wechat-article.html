@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>我把 Claude Code 调教成了一个不乱跑的好 Agent</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    background: #f5f5f5;
+    color: #1a1a1a;
+    font-size: 15px;
+    line-height: 1.8;
+  }
+  .page {
+    max-width: 680px;
+    margin: 0 auto;
+    background: #fff;
+    padding: 32px 24px 48px;
+  }
+
+  /* 标题区 */
+  .header { margin-bottom: 12px; }
+  .header h1 {
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1.4;
+    color: #111;
+  }
+  .header .meta {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #888;
+  }
+
+  /* 核心洞察块 */
+  .insight-block {
+    background: #f7f7f7;
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin: 24px 0;
+  }
+  .insight-block .label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #b5860a;
+    margin-bottom: 10px;
+  }
+  .insight-block p {
+    font-size: 15px;
+    color: #333;
+    line-height: 1.9;
+  }
+
+  /* 章节标题 */
+  .section-title {
+    display: inline-block;
+    background: #c6f135;
+    color: #111;
+    font-size: 16px;
+    font-weight: 700;
+    padding: 8px 18px;
+    border-radius: 4px;
+    margin: 32px 0 20px;
+  }
+
+  /* 卡片 */
+  .card {
+    border: 1px solid #e8e8e8;
+    border-radius: 10px;
+    padding: 22px 22px 18px;
+    margin-bottom: 16px;
+  }
+  .card-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+  .card-num {
+    background: #1a1a1a;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 2px 9px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .card-num.green { background: #c6f135; color: #111; }
+  .card h3 {
+    font-size: 17px;
+    font-weight: 700;
+    color: #111;
+  }
+  .card .subtitle {
+    font-size: 13px;
+    color: #999;
+    font-style: italic;
+    margin: 4px 0 12px 0;
+    padding-left: 2px;
+  }
+  .card p {
+    font-size: 15px;
+    color: #333;
+    line-height: 1.9;
+  }
+  .card .divider {
+    border: none;
+    border-top: 1px dashed #ddd;
+    margin: 14px 0 12px;
+  }
+  .card .link {
+    font-size: 13px;
+    color: #888;
+    word-break: break-all;
+  }
+  .card .link span { margin-right: 4px; }
+
+  /* 左边框卡片（论文风格） */
+  .card-paper {
+    border-left: 3px solid #c6f135;
+    border-top: 1px solid #e8e8e8;
+    border-right: 1px solid #e8e8e8;
+    border-bottom: 1px solid #e8e8e8;
+  }
+  .tag-small {
+    display: inline-block;
+    background: #c6f135;
+    color: #111;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 3px;
+    margin-bottom: 10px;
+  }
+
+  /* 代码块 */
+  .code-block {
+    background: #1e1e1e;
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin: 14px 0;
+    overflow-x: auto;
+  }
+  .code-block pre {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 13px;
+    color: #d4d4d4;
+    line-height: 1.7;
+    white-space: pre;
+  }
+  .code-block .comment { color: #6a9955; }
+  .code-block .pass { color: #4ec9b0; }
+  .code-block .fail { color: #f44747; }
+  .code-block .bar { color: #c6f135; }
+
+  /* 表格 */
+  .table-wrap { margin: 16px 0; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th {
+    background: #f0f0f0;
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+    color: #333;
+  }
+  td { padding: 10px 14px; border-bottom: 1px solid #eee; color: #444; }
+  tr:last-child td { border-bottom: none; }
+
+  /* 流程图 */
+  .flow {
+    background: #f7f7f7;
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin: 16px 0;
+    font-size: 14px;
+    color: #333;
+    line-height: 2.2;
+  }
+  .flow .step { display: flex; align-items: flex-start; gap: 10px; }
+  .flow .step-num {
+    background: #c6f135;
+    color: #111;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    margin-top: 3px;
+  }
+  .flow .arrow {
+    color: #bbb;
+    padding-left: 28px;
+    font-size: 16px;
+    line-height: 1.2;
+  }
+
+  /* 底部 */
+  .footer {
+    background: #1a1a1a;
+    border-radius: 10px;
+    padding: 28px 24px;
+    text-align: center;
+    margin-top: 40px;
+  }
+  .footer .name {
+    font-size: 18px;
+    font-weight: 700;
+    color: #c6f135;
+    margin-bottom: 8px;
+  }
+  .footer .desc { font-size: 13px; color: #aaa; }
+
+  /* 正文段落 */
+  .body-text { font-size: 15px; color: #333; line-height: 1.9; margin: 12px 0; }
+  .body-text + .body-text { margin-top: 8px; }
+  strong { color: #111; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- 标题 -->
+  <div class="header">
+    <h1>🔧 我把 Claude Code 调教成了一个不乱跑的好 Agent</h1>
+    <div class="meta">2026-04-02 &nbsp;|&nbsp; 工具分享 + 开源项目</div>
+  </div>
+
+  <!-- 核心洞察 -->
+  <div class="insight-block">
+    <div class="label">🎯 先说结论</div>
+    <p>Claude Code 和 Codex 已经够强了，问题不在模型，在你的仓库。没有入口文件、没有架构约束、没有当前任务——agent 进来两眼一抹黑，写出来的东西自然偏。这个工具做的就是把仓库改造成 agent 能顺畅工作的环境。</p>
+  </div>
+
+  <!-- 第一节：问题 -->
+  <div class="section-title">📌 问题是这样来的</div>
+
+  <p class="body-text">把任务丢给 Claude Code，它开始噼里啪啦写代码。写完你一看——方向错了。它不知道你有个专门的 utils/ 目录，不知道这个模块不能直接访问数据库，不知道你上周刚重构了那块逻辑。</p>
+  <p class="body-text">于是你花 20 分钟解释背景，它重写，还是偏，再解释……</p>
+  <p class="body-text">今年二月 OpenAI 发了一篇文章叫 <strong>Harness Engineering</strong>，核心观点是：agent 能不能好好工作，很大程度上取决于仓库有没有给它准备好"工作环境"。他们内部用这套方法，让 agent 承担了相当一部分实际开发工作。</p>
+  <p class="body-text">不是零人工干预——<strong>人负责决策和审查，agent 负责执行</strong>。分工很清晰：</p>
+
+  <div class="table-wrap">
+    <table>
+      <tr><th>人类负责</th><th>Agent 负责</th></tr>
+      <tr><td>目标和验收标准</td><td>读文档理解仓库</td></tr>
+      <tr><td>架构决策</td><td>写代码、跑测试</td></tr>
+      <tr><td>安全审查</td><td>开 PR、响应 review</td></tr>
+      <tr><td>最终合并</td><td>根据反馈修改</td></tr>
+    </table>
+  </div>
+
+  <p class="body-text">问题是大多数仓库根本没给 agent 准备这些东西。我就照着这个思路做了个 CLI 工具。</p>
+
+  <!-- 第二节：初始化 -->
+  <div class="section-title">🚀 一条命令初始化</div>
+
+  <div class="code-block"><pre>curl -fsSL https://raw.githubusercontent.com/PIGU-PPPgu/harness-skill-v2/main/install.sh | bash
+
+cd your-project
+harness init</pre></div>
+
+  <p class="body-text">跑完之后，项目里多了这些：</p>
+
+  <div class="code-block"><pre>your-project/
+├── CLAUDE.md          <span class="comment">← Claude Code 自动读取的入口文件</span>
+├── AGENTS.md          <span class="comment">← Codex / 其他 agent 的入口文件</span>
+└── .harness/
+    └── docs/
+        ├── architecture/   <span class="comment">← 系统架构文档</span>
+        ├── product/        <span class="comment">← 产品需求</span>
+        ├── quality/        <span class="comment">← 质量标准（已预填命令）</span>
+        ├── security/       <span class="comment">← 安全规范</span>
+        └── plans/active/   <span class="comment">← 执行计划（JSON + 状态机）</span></pre></div>
+
+  <p class="body-text">你填好这些文档，agent 进来读一遍，就知道这个项目是干什么的、架构怎么分层、什么不能动、当前在做哪个任务。</p>
+
+  <!-- 第三节：执行计划 -->
+  <div class="section-title">📋 执行计划：让 agent 知道"现在在做什么"</div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num green">关键</span>
+      <h3>任务状态机</h3>
+    </div>
+    <p>计划存成 JSON 文件，带状态机（pending → in_progress → done）。Agent 每次开始工作先读计划，做完一步更新状态，下次继续不用从头解释。</p>
+  </div>
+
+  <div class="code-block"><pre>harness plan create "实现用户认证" "添加 JWT 认证，保护 API 接口"
+<span class="comment"># → Created execution plan: EP-20260401-120000</span>
+
+harness plan list
+<span class="comment"># → Active plans:</span>
+<span class="comment">#   EP-20260401-120000  [0/3]  实现用户认证</span></pre></div>
+
+  <!-- 第四节：check -->
+  <div class="section-title">✅ harness check：机械化验收</div>
+
+  <p class="body-text">很多"质量检查"工具其实只是打印一行"✓ passed"，背后什么都没跑。<code style="background:#f0f0f0;padding:1px 5px;border-radius:3px;font-size:13px;">harness check</code> 是真的跑：</p>
+
+  <div class="code-block"><pre>Project type: nextjs
+──────────────────────────────────────────────────
+
+<span class="pass">✓ [PASS] harness-docs  (2ms)</span>
+<span class="pass">✓ [PASS] lint  (1843ms)</span>
+<span class="fail">✗ [FAIL] test  (4201ms)</span>
+<span class="fail">  $ npx vitest run</span>
+<span class="fail">  FAIL src/auth.test.ts</span>
+<span class="fail">    ✗ should return 401 for invalid token</span>
+
+Results: 2/3 checks passed</pre></div>
+
+  <p class="body-text">自动检测项目类型（Next.js / Node / Python / Go / Rust），选对应的 lint 和 test 命令。失败就 exit 1，直接卡掉 CI。不是"建议你测试一下"，是没过就不让合并。</p>
+
+  <!-- 第五节：audit -->
+  <div class="section-title">📊 harness audit：量化 agent 可读性</div>
+
+  <div class="code-block"><pre>  ✓ Architecture documentation          +20
+  ✓ Principles / quality standards      +15
+  ✓ AGENTS.md                           +10
+  ✓ CLAUDE.md                           +5
+  ✗ Active execution plans                0/15
+  ✓ Test directory                       +20
+  ✓ Linter configuration                 +10
+  ✗ CI/CD workflows                       0/5
+
+  Agent Readability Score:
+  <span class="bar">[███████████████░░░░░]</span> 80/100
+
+  ✓ Excellent — highly readable for agents</pre></div>
+
+  <p class="body-text">把仓库对 agent 的友好程度量化成 0-100 的分数。文档没更新、没有执行计划、没有 CI——分数会掉。分数掉了，agent 工作质量也会掉，这个因果链是真实的。</p>
+
+  <!-- 第六节：garden -->
+  <div class="section-title">🌿 harness garden：代码卫生</div>
+
+  <div class="card card-paper">
+    <div class="tag-small">检查项</div>
+    <p>90 天未更新的文档（过期信息比没有信息更危险）</p>
+    <hr class="divider">
+    <p>重复定义的工具函数——debounce / formatDate 写了三份</p>
+    <hr class="divider">
+    <p>未经 schema 验证的 API 响应</p>
+    <hr class="divider">
+    <p>setTimeout 里的硬编码数字</p>
+  </div>
+
+  <!-- 第七节：工作流 -->
+  <div class="section-title">🔄 完整工作流</div>
+
+  <div class="flow">
+    <div class="step"><span class="step-num">1</span><span><strong>harness init</strong> — 生成文档骨架</span></div>
+    <div class="arrow">↓</div>
+    <div class="step"><span class="step-num">2</span><span><strong>填写文档</strong> — 描述架构、需求、约束</span></div>
+    <div class="arrow">↓</div>
+    <div class="step"><span class="step-num">3</span><span><strong>harness plan create</strong> — 创建执行计划</span></div>
+    <div class="arrow">↓</div>
+    <div class="step"><span class="step-num">4</span><span><strong>claude / codex</strong> — Agent 读文档、写代码、开 PR</span></div>
+    <div class="arrow">↓</div>
+    <div class="step"><span class="step-num">5</span><span><strong>harness check &amp;&amp; harness audit</strong> — 验收</span></div>
+    <div class="arrow">↓</div>
+    <div class="step"><span class="step-num">6</span><span><strong>人类 review 并合并</strong></span></div>
+  </div>
+
+  <p class="body-text">步骤 4 就是你正常用 Claude Code 或 Codex，不需要换工具。Harness 做的是让步骤 4 变得更顺。</p>
+
+  <!-- 项目信息 -->
+  <div class="section-title">📦 项目信息</div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-num">GitHub</span>
+      <h3>harness-skill-v2</h3>
+    </div>
+    <p>MIT License，支持 macOS / Linux，自动检测 Next.js / Node / Python / Go / Rust。</p>
+    <hr class="divider">
+    <div class="link"><span>🔗</span>https://github.com/PIGU-PPPgu/harness-skill-v2</div>
+  </div>
+
+  <!-- 底部 -->
+  <div class="footer">
+    <div class="name">Harness Engineering</div>
+    <div class="desc">把你的仓库改造成 AI agent 可以持续、高效工作的环境</div>
+  </div>
+
+</div>
+</body>
+</html>
