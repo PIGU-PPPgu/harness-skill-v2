@@ -31,10 +31,12 @@ cmd_plan_create() {
 
 cmd_plan_task_add() {
     [ $# -lt 3 ] && error "Usage: harness plan task add <plan_id> <title> <description> [dep1,dep2,...]"
-    python3 "$SRC/harness_runtime.py" add-task "$1" "$2" "$3" "${4:-}"
+    local deps="${4:-}"
+    python3 "$SRC/harness_runtime.py" add-task "$1" "$2" "$3" ${deps:+"$deps"}
 }
 
 cmd_plan_list() {
+    local plans_dir="$HARNESS_DIR/docs/plans/active"
     if [ ! -d "$plans_dir" ] || [ -z "$(ls "$plans_dir"/*.json 2>/dev/null)" ]; then
         info "No active plans. Run: harness plan create <title> <desc>"
         return
