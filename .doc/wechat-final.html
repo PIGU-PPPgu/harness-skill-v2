@@ -1,0 +1,253 @@
+<h1 style="font-size:24px;font-weight:bold;margin-bottom:6px;color:#191A23;">
+  <span leaf="">🔧 我把 Claude Code 调教成了一个不乱跑的好 Agent</span>
+</h1>
+<p style="font-size:13px;color:#666;margin-bottom:18px;">
+  <span leaf="">2026-04-02 | 工具分享 + 开源项目</span>
+</p>
+
+<section style="background:#191A23;border-radius:8px;padding:15px;margin-bottom:20px;color:#fff;">
+  <h3 style="color:#B9FF66;margin-bottom:8px;font-size:14px;">
+    <span leaf="">🎯 先说结论</span>
+  </h3>
+  <p style="font-size:13px;line-height:1.7;">
+    <span leaf="">Claude Code 和 Codex 已经够强了，问题不在模型，在你的仓库。没有入口文件、没有架构约束、没有当前任务——agent 进来两眼一抹黑，写出来的东西自然偏。这个工具做的就是把仓库改造成 agent 能顺畅工作的环境。</span>
+  </p>
+</section>
+
+<h2 style="background:#B9FF66;display:inline-block;padding:5px 12px;font-size:14px;font-weight:bold;margin-top:20px;margin-bottom:15px;border-radius:4px;color:#191A23;">
+  <span leaf="">📌 问题是这样来的</span>
+</h2>
+
+<p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:10px;">
+  <span leaf="">把任务丢给 Claude Code，它开始噼里啪啦写代码。写完你一看——方向错了。它不知道你有个专门的 utils/ 目录，不知道这个模块不能直接访问数据库，不知道你上周刚重构了那块逻辑。</span>
+</p>
+<p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:10px;">
+  <span leaf="">于是你花 20 分钟解释背景，它重写，还是偏，再解释……</span>
+</p>
+<p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:10px;">
+  <span leaf="">今年二月 OpenAI 发了一篇文章叫 Harness Engineering，核心观点是：agent 能不能好好工作，很大程度上取决于仓库有没有给它准备好"工作环境"。他们内部用这套方法，让 agent 承担了相当一部分实际开发工作。</span>
+</p>
+<p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:16px;">
+  <span leaf="">不是零人工干预——</span><strong style="color:#191A23;"><span leaf="">人负责决策和审查，agent 负责执行</span></strong><span leaf="">。分工很清晰：</span>
+</p>
+
+<section style="background:#f8f9fa;border-radius:8px;padding:14px;margin-bottom:20px;">
+  <p style="font-size:13px;margin-bottom:8px;">
+    <span style="display:inline-block;width:45%;font-weight:bold;color:#191A23;"><span leaf="">人类负责</span></span>
+    <span style="display:inline-block;width:45%;font-weight:bold;color:#191A23;"><span leaf="">Agent 负责</span></span>
+  </p>
+  <p style="font-size:12px;color:#555;border-top:1px solid #eee;padding-top:8px;margin-bottom:6px;">
+    <span style="display:inline-block;width:45%;"><span leaf="">目标和验收标准</span></span>
+    <span style="display:inline-block;width:45%;"><span leaf="">读文档理解仓库</span></span>
+  </p>
+  <p style="font-size:12px;color:#555;border-top:1px solid #eee;padding-top:6px;margin-bottom:6px;">
+    <span style="display:inline-block;width:45%;"><span leaf="">架构决策</span></span>
+    <span style="display:inline-block;width:45%;"><span leaf="">写代码、跑测试</span></span>
+  </p>
+  <p style="font-size:12px;color:#555;border-top:1px solid #eee;padding-top:6px;margin-bottom:6px;">
+    <span style="display:inline-block;width:45%;"><span leaf="">安全审查</span></span>
+    <span style="display:inline-block;width:45%;"><span leaf="">开 PR、响应 review</span></span>
+  </p>
+  <p style="font-size:12px;color:#555;border-top:1px solid #eee;padding-top:6px;">
+    <span style="display:inline-block;width:45%;"><span leaf="">最终合并</span></span>
+    <span style="display:inline-block;width:45%;"><span leaf="">根据反馈修改</span></span>
+  </p>
+</section>
+
+<h2 style="background:#B9FF66;display:inline-block;padding:5px 12px;font-size:14px;font-weight:bold;margin-top:4px;margin-bottom:15px;border-radius:4px;color:#191A23;">
+  <span leaf="">🚀 一条命令初始化</span>
+</h2>
+
+<p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:10px;">
+  <span leaf="">安装之后，在你的项目目录里跑：</span>
+</p>
+
+<section style="background:#191A23;border-radius:8px;padding:14px;margin-bottom:10px;">
+  <p style="font-family:monospace;font-size:12px;color:#d4d4d4;line-height:1.8;margin:0;">
+    <span leaf="">harness init</span>
+  </p>
+</section>
+
+<p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:10px;">
+  <span leaf="">跑完之后，项目里多了这些：</span>
+</p>
+
+<section style="background:#191A23;border-radius:8px;padding:14px;margin-bottom:20px;">
+  <p style="font-family:monospace;font-size:12px;color:#d4d4d4;line-height:1.9;margin:0;">
+    <span leaf="">your-project/</span><br>
+    <span leaf="">├── CLAUDE.md</span><span style="color:#6a9955;"><span leaf="">  ← Claude Code 自动读取</span></span><br>
+    <span leaf="">├── AGENTS.md</span><span style="color:#6a9955;"><span leaf="">   ← Codex / 其他 agent</span></span><br>
+    <span leaf="">└── .harness/docs/</span><br>
+    <span leaf="">&nbsp;&nbsp;&nbsp;&nbsp;├── architecture/</span><span style="color:#6a9955;"><span leaf="">  ← 系统架构</span></span><br>
+    <span leaf="">&nbsp;&nbsp;&nbsp;&nbsp;├── product/</span><span style="color:#6a9955;"><span leaf="">       ← 产品需求</span></span><br>
+    <span leaf="">&nbsp;&nbsp;&nbsp;&nbsp;├── quality/</span><span style="color:#6a9955;"><span leaf="">       ← 质量标准</span></span><br>
+    <span leaf="">&nbsp;&nbsp;&nbsp;&nbsp;├── security/</span><span style="color:#6a9955;"><span leaf="">      ← 安全规范</span></span><br>
+    <span leaf="">&nbsp;&nbsp;&nbsp;&nbsp;└── plans/active/</span><span style="color:#6a9955;"><span leaf="">  ← 执行计划</span></span>
+  </p>
+</section>
+
+<p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:20px;">
+  <span leaf="">你填好这些文档，agent 进来读一遍，就知道这个项目是干什么的、架构怎么分层、什么不能动、当前在做哪个任务。</span>
+</p>
+
+<h2 style="background:#B9FF66;display:inline-block;padding:5px 12px;font-size:14px;font-weight:bold;margin-top:4px;margin-bottom:15px;border-radius:4px;color:#191A23;">
+  <span leaf="">📋 执行计划：让 agent 知道"现在在做什么"</span>
+</h2>
+
+<section style="background:#fff;border:2px solid #191A23;border-radius:8px;padding:14px;margin-bottom:12px;">
+  <p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:10px;">
+    <span leaf="">计划存成 JSON 文件，带状态机（pending → in_progress → done）。Agent 每次开始工作先读计划，做完一步更新状态，下次继续不用从头解释。</span>
+  </p>
+  <section style="background:#191A23;border-radius:6px;padding:12px;">
+    <p style="font-family:monospace;font-size:12px;color:#d4d4d4;line-height:1.9;margin:0;">
+      <span leaf="">harness plan create "实现用户认证" "添加 JWT"</span><br>
+      <span style="color:#6a9955;"><span leaf=""># → Created: EP-20260401-120000</span></span><br><br>
+      <span leaf="">harness plan list</span><br>
+      <span style="color:#6a9955;"><span leaf=""># EP-20260401-120000  [0/3]  实现用户认证</span></span>
+    </p>
+  </section>
+</section>
+
+<h2 style="background:#B9FF66;display:inline-block;padding:5px 12px;font-size:14px;font-weight:bold;margin-top:16px;margin-bottom:15px;border-radius:4px;color:#191A23;">
+  <span leaf="">✅ harness check：机械化验收</span>
+</h2>
+
+<p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:10px;">
+  <span leaf="">很多"质量检查"工具其实只是打印一行"✓ passed"，背后什么都没跑。harness check 是真的跑：</span>
+</p>
+
+<section style="background:#191A23;border-radius:8px;padding:14px;margin-bottom:10px;">
+  <p style="font-family:monospace;font-size:12px;color:#d4d4d4;line-height:1.9;margin:0;">
+    <span leaf="">Project type: nextjs</span><br>
+    <span leaf="">──────────────────────────────</span><br>
+    <span style="color:#4ec9b0;"><span leaf="">✓ [PASS] harness-docs  (2ms)</span></span><br>
+    <span style="color:#4ec9b0;"><span leaf="">✓ [PASS] lint  (1843ms)</span></span><br>
+    <span style="color:#f44747;"><span leaf="">✗ [FAIL] test  (4201ms)</span></span><br>
+    <span style="color:#f44747;"><span leaf="">&nbsp;&nbsp;✗ should return 401 for invalid token</span></span><br><br>
+    <span leaf="">Results: 2/3 checks passed</span>
+  </p>
+</section>
+
+<p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:20px;">
+  <span leaf="">自动检测项目类型（Next.js / Node / Python / Go / Rust），选对应的 lint 和 test 命令。失败就 exit 1，直接卡掉 CI。不是"建议你测试一下"，是没过就不让合并。</span>
+</p>
+
+<h2 style="background:#B9FF66;display:inline-block;padding:5px 12px;font-size:14px;font-weight:bold;margin-top:4px;margin-bottom:15px;border-radius:4px;color:#191A23;">
+  <span leaf="">📊 harness audit：量化 agent 可读性</span>
+</h2>
+
+<section style="background:#191A23;border-radius:8px;padding:14px;margin-bottom:10px;">
+  <p style="font-family:monospace;font-size:12px;color:#d4d4d4;line-height:1.9;margin:0;">
+    <span style="color:#4ec9b0;"><span leaf="">✓ Architecture documentation    +20</span></span><br>
+    <span style="color:#4ec9b0;"><span leaf="">✓ Principles / quality standards +15</span></span><br>
+    <span style="color:#4ec9b0;"><span leaf="">✓ AGENTS.md                      +10</span></span><br>
+    <span style="color:#4ec9b0;"><span leaf="">✓ CLAUDE.md                       +5</span></span><br>
+    <span style="color:#f44747;"><span leaf="">✗ Active execution plans          0/15</span></span><br>
+    <span style="color:#4ec9b0;"><span leaf="">✓ Test directory                  +20</span></span><br>
+    <span style="color:#4ec9b0;"><span leaf="">✓ Linter configuration            +10</span></span><br>
+    <span style="color:#f44747;"><span leaf="">✗ CI/CD workflows                  0/5</span></span><br><br>
+    <span style="color:#B9FF66;"><span leaf="">[███████████████░░░░░] 80/100</span></span><br>
+    <span style="color:#B9FF66;"><span leaf="">✓ Excellent — highly readable for agents</span></span>
+  </p>
+</section>
+
+<p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:20px;">
+  <span leaf="">把仓库对 agent 的友好程度量化成 0-100 的分数。文档没更新、没有执行计划、没有 CI——分数会掉。分数掉了，agent 工作质量也会掉，这个因果链是真实的。</span>
+</p>
+
+<h2 style="background:#B9FF66;display:inline-block;padding:5px 12px;font-size:14px;font-weight:bold;margin-top:4px;margin-bottom:15px;border-radius:4px;color:#191A23;">
+  <span leaf="">🌿 harness garden：代码卫生</span>
+</h2>
+
+<section style="background:#fff;border-left:3px solid #B9FF66;border-top:1px solid #eee;border-right:1px solid #eee;border-bottom:1px solid #eee;border-radius:0 8px 8px 0;padding:14px;margin-bottom:20px;">
+  <p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:6px;">
+    <span leaf="">📌 90 天未更新的文档（过期信息比没有信息更危险）</span>
+  </p>
+  <p style="font-size:13px;color:#333;line-height:1.8;border-top:1px dashed #eee;padding-top:6px;margin-bottom:6px;">
+    <span leaf="">📌 重复定义的工具函数——debounce / formatDate 写了三份</span>
+  </p>
+  <p style="font-size:13px;color:#333;line-height:1.8;border-top:1px dashed #eee;padding-top:6px;margin-bottom:6px;">
+    <span leaf="">📌 未经 schema 验证的 API 响应</span>
+  </p>
+  <p style="font-size:13px;color:#333;line-height:1.8;border-top:1px dashed #eee;padding-top:6px;">
+    <span leaf="">📌 setTimeout 里的硬编码数字</span>
+  </p>
+</section>
+
+<h2 style="background:#B9FF66;display:inline-block;padding:5px 12px;font-size:14px;font-weight:bold;margin-top:4px;margin-bottom:15px;border-radius:4px;color:#191A23;">
+  <span leaf="">🔄 完整工作流</span>
+</h2>
+
+<section style="background:#f8f9fa;border-radius:8px;padding:16px;margin-bottom:20px;">
+  <p style="font-size:13px;color:#333;line-height:1.6;margin-bottom:6px;">
+    <span style="background:#B9FF66;color:#191A23;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;margin-right:8px;"><span leaf="">1</span></span>
+    <strong><span leaf="">harness init</span></strong><span leaf=""> — 生成文档骨架</span>
+  </p>
+  <p style="font-size:12px;color:#aaa;margin-left:28px;margin-bottom:6px;"><span leaf="">↓</span></p>
+  <p style="font-size:13px;color:#333;line-height:1.6;margin-bottom:6px;">
+    <span style="background:#B9FF66;color:#191A23;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;margin-right:8px;"><span leaf="">2</span></span>
+    <strong><span leaf="">填写文档</span></strong><span leaf=""> — 描述架构、需求、约束</span>
+  </p>
+  <p style="font-size:12px;color:#aaa;margin-left:28px;margin-bottom:6px;"><span leaf="">↓</span></p>
+  <p style="font-size:13px;color:#333;line-height:1.6;margin-bottom:6px;">
+    <span style="background:#B9FF66;color:#191A23;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;margin-right:8px;"><span leaf="">3</span></span>
+    <strong><span leaf="">harness plan create</span></strong><span leaf=""> — 创建执行计划</span>
+  </p>
+  <p style="font-size:12px;color:#aaa;margin-left:28px;margin-bottom:6px;"><span leaf="">↓</span></p>
+  <p style="font-size:13px;color:#333;line-height:1.6;margin-bottom:6px;">
+    <span style="background:#B9FF66;color:#191A23;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;margin-right:8px;"><span leaf="">4</span></span>
+    <strong><span leaf="">claude / codex</span></strong><span leaf=""> — Agent 读文档、写代码、开 PR</span>
+  </p>
+  <p style="font-size:12px;color:#aaa;margin-left:28px;margin-bottom:6px;"><span leaf="">↓</span></p>
+  <p style="font-size:13px;color:#333;line-height:1.6;margin-bottom:6px;">
+    <span style="background:#B9FF66;color:#191A23;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;margin-right:8px;"><span leaf="">5</span></span>
+    <strong><span leaf="">harness check &amp;&amp; harness audit</span></strong><span leaf=""> — 验收</span>
+  </p>
+  <p style="font-size:12px;color:#aaa;margin-left:28px;margin-bottom:6px;"><span leaf="">↓</span></p>
+  <p style="font-size:13px;color:#333;line-height:1.6;">
+    <span style="background:#191A23;color:#fff;padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;margin-right:8px;"><span leaf="">6</span></span>
+    <strong><span leaf="">人类 review 并合并</span></strong>
+  </p>
+</section>
+
+<p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:20px;">
+  <span leaf="">步骤 4 就是你正常用 Claude Code 或 Codex，不需要换工具。Harness 做的是让步骤 4 变得更顺。</span>
+</p>
+
+<h2 style="background:#B9FF66;display:inline-block;padding:5px 12px;font-size:14px;font-weight:bold;margin-top:4px;margin-bottom:15px;border-radius:4px;color:#191A23;">
+  <span leaf="">📦 安装</span>
+</h2>
+
+<section style="background:#fff;border:2px solid #191A23;border-radius:8px;padding:14px;margin-bottom:20px;">
+  <p style="font-size:13px;color:#333;line-height:1.8;margin-bottom:8px;">
+    <span leaf="">支持 macOS / Linux，自动检测 Next.js / Node / Python / Go / Rust。MIT License。</span>
+  </p>
+  <section style="background:#191A23;border-radius:6px;padding:12px;margin-bottom:10px;">
+    <p style="font-family:monospace;font-size:12px;color:#d4d4d4;line-height:1.6;margin:0;word-break:break-all;">
+      <span leaf="">curl -fsSL https://raw.githubusercontent.com/PIGU-PPPgu/harness-skill-v2/main/install.sh | bash</span>
+    </p>
+  </section>
+  <p style="font-size:12px;color:#888;word-break:break-all;">
+    <span leaf="">🔗 https://github.com/PIGU-PPPgu/harness-skill-v2</span>
+  </p>
+</section>
+
+<section style="background:#191A23;border-radius:8px;padding:20px;text-align:center;margin-top:24px;">
+  <p style="font-size:16px;font-weight:bold;color:#B9FF66;margin-bottom:8px;">
+    <span leaf="">Harness Engineering</span>
+  </p>
+  <p style="font-size:12px;color:#aaa;">
+    <span leaf="">把你的仓库改造成 AI agent 可以持续、高效工作的环境</span>
+  </p>
+</section>
+
+<p style="margin-bottom:0px;">
+  <span leaf=""><br></span>
+</p>
+<section>
+  <span leaf=""><br></span>
+</section>
+<p style="display:none;">
+  <mp-style-type data-value="3">
+  </mp-style-type>
+</p>
