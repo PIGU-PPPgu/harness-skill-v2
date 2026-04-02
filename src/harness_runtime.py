@@ -204,6 +204,27 @@ See `.harness/docs/plans/active/` for current execution plans.
 - Run tests before creating a PR
 - If blocked or uncertain about architecture decisions, stop and ask the human
 - Update `.harness/docs/plans/active/<plan>.json` task status as you work
+
+## Multi-Agent Coordination
+
+Multiple agents can work in parallel on the same repo. Coordination is done via the
+shared plan JSON file — no orchestrator needed.
+
+**Protocol (follow exactly):**
+
+1. Read `.harness/docs/plans/active/` — find the latest active plan
+2. Find a task where `status == "pending"` AND all `dependencies` are `"done"`
+3. **Claim it immediately**: set `status = "in_progress"` in the JSON before doing any work
+   — this prevents another agent from picking up the same task
+4. Work on the task, commit to branch `harness/<plan-id>-<task-id>`
+5. When done: set `status = "done"`, add `pr_url`
+6. Go back to step 2 — pick the next available task
+
+**If no pending task is available:** all tasks are either in_progress (another agent has
+them) or blocked by unfinished dependencies. Stop and wait, or notify the human.
+
+**Never** start a task without claiming it first. **Never** modify another agent's
+`in_progress` task.
 """
 
     def _tmpl_agents_md(self) -> str:
@@ -252,11 +273,30 @@ Structured documentation lives in `.harness/docs/`:
 - Always add tests for new functionality
 -->
 
+## Multi-Agent Coordination
+
+Multiple agents (Claude Code sessions, Codex, or any other agent) can work on this
+repo in parallel. Coordination happens through the shared plan JSON — no central
+orchestrator.
+
+**Protocol:**
+
+1. Read `.harness/docs/plans/active/` — find the active plan
+2. Find a task: `status == "pending"` AND all items in `dependencies` are `"done"`
+3. **Claim it first**: write `status = "in_progress"` to the JSON before touching any code
+4. Work on the task on branch `harness/<plan-id>-<task-id>`
+5. Run tests, open PR, then set `status = "done"` and record `pr_url`
+6. Repeat from step 2
+
+**If no task is claimable:** either all pending tasks have unmet dependencies, or
+another agent has claimed everything. Stop and report to the human.
+
 ## When to Stop and Ask
 
 - Architecture decisions that affect multiple modules
 - Security-sensitive changes
 - Anything that requires production access
+- Dependency conflict between tasks (two tasks need to modify the same file)
 """
 
     def _tmpl_docs_readme(self) -> str:
