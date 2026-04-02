@@ -185,7 +185,7 @@ def main():
     """CLI 入口"""
     import sys
 
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 2:
         print("Usage: agent_loop.py <plan_id> [max_iterations]")
         sys.exit(1)
 

@@ -646,6 +646,13 @@ def main():
             sys.exit(1)
         plan = runtime.create_plan(sys.argv[2], sys.argv[3])
         print(f"Plan ID: {plan.id}")
+    elif command == "add-task":
+        if len(sys.argv) < 5:
+            print("Usage: harness_runtime.py add-task <plan_id> <title> <description> [dep1,dep2,...]")
+            sys.exit(1)
+        deps = sys.argv[5].split(",") if len(sys.argv) > 5 else []
+        task = runtime.add_task(sys.argv[2], sys.argv[3], sys.argv[4], deps)
+        print(f"Task ID: {task.id}")
     else:
         print(f"Unknown command: {command}")
         sys.exit(1)

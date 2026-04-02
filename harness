@@ -29,8 +29,12 @@ cmd_plan_create() {
     python3 "$SRC/harness_runtime.py" create-plan "$1" "$2"
 }
 
+cmd_plan_task_add() {
+    [ $# -lt 3 ] && error "Usage: harness plan task add <plan_id> <title> <description> [dep1,dep2,...]"
+    python3 "$SRC/harness_runtime.py" add-task "$1" "$2" "$3" "${4:-}"
+}
+
 cmd_plan_list() {
-    local plans_dir="$HARNESS_DIR/docs/plans/active"
     if [ ! -d "$plans_dir" ] || [ -z "$(ls "$plans_dir"/*.json 2>/dev/null)" ]; then
         info "No active plans. Run: harness plan create <title> <desc>"
         return
@@ -137,6 +141,8 @@ SETUP
 PLANNING
   plan create <title> <desc>        Create execution plan (JSON + state machine)
   plan list                         List active plans
+  plan task add <plan_id> <title> <desc> [deps]
+                                    Add task to plan (deps: comma-separated task IDs)
 
 EXECUTION
   run [plan_id]                     Start agent main loop (needs ANTHROPIC_API_KEY)
@@ -181,6 +187,11 @@ main() {
                         case "${1:-}" in
                             create)   shift; cmd_plan_create "$@" ;;
                             list)     cmd_plan_list ;;
+                            task)     shift
+                                      case "${1:-}" in
+                                          add) shift; cmd_plan_task_add "$@" ;;
+                                          *)   error "Unknown plan task command: ${1:-}" ;;
+                                      esac ;;
                             *)        error "Unknown plan command: ${1:-}" ;;
                         esac ;;
         run)            shift; cmd_run "$@" ;;
