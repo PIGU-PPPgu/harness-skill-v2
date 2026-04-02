@@ -70,18 +70,19 @@ your-project/
 ## 工作流
 
 ```
-1. harness init          生成文档骨架
+1. harness init              生成文档骨架
         ↓
-2. 填写文档              描述架构、需求、约束
+2. 填写文档                  描述架构、需求、约束
         ↓
-3. harness plan create   创建执行计划
+3. harness plan create       创建执行计划
+   harness plan task add     拆分任务，设置依赖关系
         ↓
-4. claude / codex        Agent 读文档、写代码、开 PR
+4. claude / codex            Agent 读文档、认领任务、写代码、开 PR
         ↓
-5. harness check         验收（lint + test + 文档完整性）
-6. harness audit         检查 agent readability 评分
+5. harness check             验收（lint + test + 文档完整性）
+   harness audit             检查 agent readability 评分
         ↓
-7. 人类 review 并合并
+6. 人类 review 并合并
 ```
 
 ---
@@ -99,12 +100,21 @@ harness init
 ### 执行计划
 
 ```bash
+# 创建计划
 harness plan create "实现用户认证" "添加 JWT 认证，保护 API 接口"
 # → Created execution plan: EP-20260401-120000
 
+# 添加任务（可选：指定依赖）
+harness plan task add EP-20260401-120000 "设计数据库 schema" "users 表，tokens 表"
+# → Task ID: EP-20260401-120000-T001
+
+harness plan task add EP-20260401-120000 "实现 JWT 签发" "登录接口" EP-20260401-120000-T001
+# → Task ID: EP-20260401-120000-T002（依赖 T001 完成后才可认领）
+
+# 查看计划
 harness plan list
 # → Active plans:
-#   EP-20260401-120000  [0/3]  实现用户认证
+#   EP-20260401-120000  [0/2]  实现用户认证
 ```
 
 ### 质量检查
@@ -160,13 +170,34 @@ harness garden --docs-only   # 只检查文档
 harness golden-rules         # 代码模式检查（重复工具函数、未验证 API、魔法数字）
 ```
 
-### 后台 Daemon
+---
+
+## 多 Agent 并行
+
+`harness init` 生成的 `CLAUDE.md` 和 `AGENTS.md` 内置了多 agent 协调协议。多个 Claude Code 或 Codex 实例可以同时在同一个仓库工作，通过 plan JSON 文件协调，不需要中央调度器。
+
+**协议（每个 agent 严格遵守）：**
+
+1. 读 `.harness/docs/plans/active/` 找到当前计划
+2. 找一个 `status == "pending"` 且所有依赖都是 `"done"` 的任务
+3. **立即认领**：把 `status` 改为 `"in_progress"`，再开始写代码
+4. 在分支 `harness/<plan-id>-<task-id>` 上工作
+5. 完成后：`status = "done"`，记录 `pr_url`
+6. 回到第 2 步
+
+**实际操作：**
 
 ```bash
-harness-daemon start    # 启动后台 daemon，自动顺序触发 agent 阶段
-harness-daemon status   # 查看状态
-harness-daemon logs     # 查看日志
+# 终端 1 — Agent A
+cd your-project && claude
+# Claude Code 自动读 CLAUDE.md，认领第一个可用任务
+
+# 终端 2 — Agent B（同时开）
+cd your-project && claude
+# 认领另一个没有未完成依赖的任务
 ```
+
+关键：步骤 3 的"先认领再动手"防止两个 agent 抢同一个任务。
 
 ---
 
@@ -184,22 +215,32 @@ harness-daemon logs     # 查看日志
 
 ## CI 集成
 
+`.github/workflows/harness-check.yml` 已包含在本仓库，可以直接复制到你的项目：
+
 ```yaml
-# .github/workflows/harness-check.yml
 name: Harness Check
-on: [pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Install harness
-        run: curl -fsSL https://raw.githubusercontent.com/PIGU-PPPgu/harness-skill-v2/main/install.sh | bash
-      - name: Quality check
+        run: |
+          chmod +x harness
+          echo "$PWD" >> $GITHUB_PATH
+      - name: harness check
         run: harness check --json
-      - name: Agent readability
-        run: harness audit --score
 ```
+
+`harness check` 失败时 exit 1，直接卡住 PR 合并。
 
 ---
 
