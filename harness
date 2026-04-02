@@ -2,507 +2,194 @@
 
 set -euo pipefail
 
-VERSION="2.1.0"
-# 注意：版本与 CHANGELOG.md 保持同步
+VERSION="2.2.0"
 HARNESS_DIR=".harness"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_RUNTIME="$SCRIPT_DIR/src/harness_runtime.py"
-AGENT_LOOP="$SCRIPT_DIR/src/agent_loop.py"
-HARNESS_CHECK="$SCRIPT_DIR/src/harness_check.py"
+SRC="$SCRIPT_DIR/src"
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+info()    { echo -e "${BLUE}ℹ${NC} $*"; }
+success() { echo -e "${GREEN}✓${NC} $*"; }
+warn()    { echo -e "${YELLOW}⚠${NC} $*"; }
+error()   { echo -e "${RED}✗${NC} $*"; exit 1; }
 
-# 日志函数
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# 初始化项目结构
+# ── init ──────────────────────────────────────────────────────────────────────
 cmd_init() {
-    log_info "初始化 Harness Engineering 项目结构..."
-
-    # 调用 Python 运行时
-    if [ -f "$PYTHON_RUNTIME" ]; then
-        python3 "$PYTHON_RUNTIME" init
-    else
-        log_error "Python runtime not found: $PYTHON_RUNTIME"
-        exit 1
-    fi
-
-    log_success "项目结构初始化完成"
-    log_info "下一步:"
-    echo "  1. 在 .harness/docs/product/ 创建产品需求文档"
-    echo "  2. 运行 'harness plan create' 创建执行计划"
-    echo "  3. 运行 'harness run' 启动 agent 主循环"
+    python3 "$SRC/harness_runtime.py" init
 }
 
-# 创建执行计划
+# ── plan ──────────────────────────────────────────────────────────────────────
 cmd_plan_create() {
-    if [ $# -lt 2 ]; then
-        log_error "用法: harness plan create <title> <description>"
-        exit 1
-    fi
-
-    local title="$1"
-    local description="$2"
-
-    log_info "创建执行计划: $title"
-
-    if [ -f "$PYTHON_RUNTIME" ]; then
-        python3 "$PYTHON_RUNTIME" create-plan "$title" "$description"
-    else
-        log_error "Python runtime not found"
-        exit 1
-    fi
+    [ $# -lt 2 ] && error "Usage: harness plan create <title> <description>"
+    python3 "$SRC/harness_runtime.py" create-plan "$1" "$2"
 }
 
-# 添加任务到计划
-cmd_plan_add_task() {
-    if [ $# -lt 3 ]; then
-        log_error "用法: harness plan add-task <plan_id> <title> <description>"
-        exit 1
+cmd_plan_list() {
+    local plans_dir="$HARNESS_DIR/docs/plans/active"
+    if [ ! -d "$plans_dir" ] || [ -z "$(ls "$plans_dir"/*.json 2>/dev/null)" ]; then
+        info "No active plans. Run: harness plan create <title> <desc>"
+        return
     fi
-
-    local plan_id="$1"
-    local title="$2"
-    local description="$3"
-
-    log_info "添加任务到计划 $plan_id"
-
-    # TODO: 调用 Python 运行时
-    log_warning "功能开发中"
+    echo ""
+    echo "Active plans:"
+    for f in "$plans_dir"/*.json; do
+        local id tasks done
+        id=$(python3 -c "import json,sys; d=json.load(open('$f')); print(d['id'])")
+        tasks=$(python3 -c "import json,sys; d=json.load(open('$f')); print(len(d['tasks']))")
+        done=$(python3 -c "import json,sys; d=json.load(open('$f')); print(sum(1 for t in d['tasks'] if t['status']=='done'))")
+        title=$(python3 -c "import json,sys; d=json.load(open('$f')); print(d['title'])")
+        echo "  $id  [$done/$tasks]  $title"
+    done
+    echo ""
 }
 
-# 运行 agent 主循环
+# ── run ───────────────────────────────────────────────────────────────────────
 cmd_run() {
     local plan_id="${1:-}"
-
     if [ -z "$plan_id" ]; then
-        # 查找最新的活跃计划
-        plan_id=$(ls -t "$HARNESS_DIR/docs/plans/active"/*.json 2>/dev/null | head -1 | xargs basename | sed 's/.json$//')
-        if [ -z "$plan_id" ]; then
-            log_error "未找到活跃的执行计划"
-            log_info "请先运行: harness plan create <title> <description>"
-            exit 1
-        fi
+        plan_id=$(ls -t "$HARNESS_DIR/docs/plans/active"/*.json 2>/dev/null \
+            | head -1 | xargs basename 2>/dev/null | sed 's/.json$//' || true)
+        [ -z "$plan_id" ] && error "No active plan. Run: harness plan create <title> <desc>"
     fi
-
-    log_info "启动 agent 主循环"
-    log_info "执行计划: $plan_id"
-
-    if [ ! -f "$AGENT_LOOP" ]; then
-        log_error "Agent loop not found: $AGENT_LOOP"
-        exit 1
-    fi
-
-    # 检查 API key
-    if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-        log_error "ANTHROPIC_API_KEY not set"
-        log_info "请设置环境变量: export ANTHROPIC_API_KEY=your_key"
-        exit 1
-    fi
-
-    python3 "$AGENT_LOOP" "$plan_id"
+    [ -z "${ANTHROPIC_API_KEY:-}" ] && error "ANTHROPIC_API_KEY not set"
+    info "Starting agent loop for plan: $plan_id"
+    python3 "$SRC/agent_loop.py" "$plan_id"
 }
 
-# 启动智能体团队（废弃，保留兼容性）
-cmd_swarm_start() {
-    log_warning "⚠️  'swarm start' 已废弃"
-    log_info "Harness Engineering 使用单主循环，不是多角色流水线"
-    log_info "请使用: harness run [plan_id]"
-    echo ""
-    read -p "是否继续使用新命令? (y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        cmd_run "$@"
-    fi
-}
-
-# 查看智能体状态
-cmd_swarm_status() {
-    local watch_mode=false
-
-    if [ "${1:-}" = "--watch" ]; then
-        watch_mode=true
-    fi
-
-    log_info "智能体团队状态:"
-    echo ""
-
-    # 读取配置
-    if [ ! -f "$HARNESS_DIR/config.json" ]; then
-        log_error "配置文件不存在"
-        exit 1
-    fi
-
-    # 显示智能体状态
-    echo "┌─────────────┬──────────┬────────────┬──────────┐"
-    echo "│ 智能体      │ 状态     │ 当前任务   │ 进度     │"
-    echo "├─────────────┼──────────┼────────────┼──────────┤"
-    echo "│ Coordinator │ 运行中   │ 任务分配   │ 100%     │"
-    echo "│ Architect   │ 运行中   │ 架构设计   │ 75%      │"
-    echo "│ Builder     │ 运行中   │ 代码实现   │ 50%      │"
-    echo "│ Reviewer    │ 空闲     │ -          │ -        │"
-    echo "│ Tester      │ 空闲     │ -          │ -        │"
-    echo "│ Doc Writer  │ 空闲     │ -          │ -        │"
-    echo "│ DevOps      │ 空闲     │ -          │ -        │"
-    echo "└─────────────┴──────────┴────────────┴──────────┘"
-    echo ""
-
-    # 显示总体进度
-    log_info "总体进度: 3/10 任务完成 (30%)"
-
-    if [ "$watch_mode" = true ]; then
-        log_info "监控模式 (按 Ctrl+C 退出)"
-        while true; do
-            sleep 5
-            clear
-            cmd_swarm_status
-        done
-    fi
-}
-
-# 停止智能体团队
-cmd_swarm_stop() {
-    log_info "停止智能体团队..."
-
-    # 这里会发送停止信号给所有智能体
-    log_success "智能体团队已停止"
-}
-
-# 暂停智能体团队
-cmd_swarm_pause() {
-    log_info "暂停智能体团队..."
-    log_success "智能体团队已暂停"
-}
-
-# 恢复智能体团队
-cmd_swarm_resume() {
-    log_info "恢复智能体团队..."
-    log_success "智能体团队已恢复"
-}
-
-# 等待智能体完成
-cmd_swarm_wait() {
-    log_info "等待智能体团队完成任务..."
-
-    # 这里会轮询检查所有任务状态
-    # 在实际实现中，会连接到消息队列监听完成事件
-
-    log_success "所有任务已完成"
-}
-
-# 列出任务
-cmd_tasks_list() {
-    log_info "任务列表:"
-    echo ""
-
-    echo "┌────────────┬──────────────────────┬──────────┬──────────┬──────────┐"
-    echo "│ 任务 ID    │ 标题                 │ 负责人   │ 状态     │ 进度     │"
-    echo "├────────────┼──────────────────────┼──────────┼──────────┼──────────┤"
-    echo "│ ARCH-001   │ 架构设计             │ Architect│ 完成     │ 100%     │"
-    echo "│ BUILD-001  │ 后端 API 实现        │ Builder  │ 进行中   │ 75%      │"
-    echo "│ BUILD-002  │ 前端组件实现         │ Builder  │ 待开始   │ 0%       │"
-    echo "│ TEST-001   │ 编写测试             │ Tester   │ 待开始   │ 0%       │"
-    echo "│ DOC-001    │ 更新文档             │ Doc Writer│ 待开始  │ 0%       │"
-    echo "│ DEPLOY-001 │ 部署上线             │ DevOps   │ 待开始   │ 0%       │"
-    echo "└────────────┴──────────────────────┴──────────┴──────────┴──────────┘"
-}
-
-# 查看智能体日志
-cmd_agent_logs() {
-    local role=""
-    local follow=false
-    local all=false
-
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --role)
-                role="$2"
-                shift 2
-                ;;
-            --follow)
-                follow=true
-                shift
-                ;;
-            --all)
-                all=true
-                shift
-                ;;
-            *)
-                shift
-                ;;
-        esac
-    done
-
-    if [ "$all" = true ]; then
-        log_info "所有智能体日志:"
-        for log_file in "$HARNESS_DIR/logs"/*.log; do
-            if [ -f "$log_file" ]; then
-                echo ""
-                log_info "=== $(basename "$log_file") ==="
-                tail -n 20 "$log_file"
-            fi
-        done
-    elif [ -n "$role" ]; then
-        log_file="$HARNESS_DIR/logs/${role}.log"
-        if [ ! -f "$log_file" ]; then
-            log_error "日志文件不存在: $log_file"
-            exit 1
-        fi
-
-        if [ "$follow" = true ]; then
-            tail -f "$log_file"
-        else
-            cat "$log_file"
-        fi
-    else
-        log_error "请指定 --role 或 --all"
-        exit 1
-    fi
-}
-
-# 真实的质量检查
+# ── check ─────────────────────────────────────────────────────────────────────
 cmd_check() {
-    local args=()
-    while [[ $# -gt 0 ]]; do
-        args+=("$1")
-        shift
-    done
-
-    if [ ! -f "$HARNESS_CHECK" ]; then
-        log_error "harness_check.py not found: $HARNESS_CHECK"
-        exit 1
-    fi
-
-    python3 "$HARNESS_CHECK" "${args[@]}"
+    python3 "$SRC/harness_check.py" "$@"
 }
 
-# 质量审计（兼容旧命令，调用 check）
+# ── audit ─────────────────────────────────────────────────────────────────────
 cmd_audit() {
-    log_warning "⚠️  'audit' 已废弃，请使用 'harness check'"
-    cmd_check "$@"
+    echo ""
+    info "Agent Readability Audit"
+    echo "────────────────────────────────────────────────"
+    python3 "$SRC/checks/audit.py" "$@"
 }
 
-# 架构约束检查
-cmd_enforce() {
-    local check_only=false
-
-    if [ "${1:-}" = "--check" ]; then
-        check_only=true
-    fi
-
-    log_info "检查架构约束..."
-
-    # 读取配置
-    if [ ! -f "$HARNESS_DIR/config.json" ]; then
-        log_error "配置文件不存在"
-        exit 1
-    fi
-
-    # 检查层级依赖
-    log_info "检查层级依赖..."
-    echo "  ✓ UI 层依赖正确"
-    echo "  ✓ Service 层依赖正确"
-    echo "  ✓ Repository 层依赖正确"
-
-    # 检查循环依赖
-    log_info "检查循环依赖..."
-    echo "  ✓ 无循环依赖"
-
-    if [ "$check_only" = false ]; then
-        log_info "强制执行架构约束..."
-        # 这里会配置 lint 规则等
-    fi
-
-    log_success "架构约束检查通过"
-}
-
-# 生成文档
-cmd_docs_generate() {
-    log_info "生成文档..."
-
-    # 生成 API 文档
-    log_info "生成 API 文档..."
-
-    # 更新 README
-    log_info "更新 README..."
-
-    # 生成变更日志
-    log_info "生成变更日志..."
-
-    log_success "文档生成完成"
-}
-
-# 代码清理
+# ── garden ────────────────────────────────────────────────────────────────────
 cmd_garden() {
-    log_info "执行代码清理..."
-
-    # 删除未使用的导入
-    log_info "删除未使用的导入..."
-
-    # 格式化代码
-    log_info "格式化代码..."
-
-    # 优化导入顺序
-    log_info "优化导入顺序..."
-
-    log_success "代码清理完成"
+    echo ""
+    info "Garden — documentation & code hygiene"
+    echo "────────────────────────────────────────────────"
+    local mode="all"
+    case "${1:-}" in
+        --docs-only) mode="docs" ;;
+        --code-only) mode="code" ;;
+    esac
+    python3 -c "
+import sys; sys.path.insert(0,'$SRC')
+from checks.garden import run_garden, print_garden
+from pathlib import Path
+report = run_garden(Path('.'), '$mode')
+print_garden(report)
+sys.exit(0 if report.passed else 1)
+"
 }
 
-# 显示帮助
+# ── golden-rules ──────────────────────────────────────────────────────────────
+cmd_golden_rules() {
+    echo ""
+    info "Golden Rules — code pattern check"
+    echo "────────────────────────────────────────────────"
+    python3 -c "
+import sys; sys.path.insert(0,'$SRC')
+from checks.golden_rules import run_golden_rules, print_golden_rules
+from pathlib import Path
+report = run_golden_rules(Path('.'))
+print_golden_rules(report)
+sys.exit(0 if report.passed else 1)
+"
+}
+
+# ── logs ──────────────────────────────────────────────────────────────────────
+cmd_logs() {
+    local follow=false
+    [ "${1:-}" = "--follow" ] && follow=true
+    local log_dir="$HARNESS_DIR/logs"
+    [ ! -d "$log_dir" ] && error "No logs directory. Run: harness init"
+    if [ "$follow" = true ]; then
+        tail -f "$log_dir"/*.log 2>/dev/null || info "No log files yet"
+    else
+        for f in "$log_dir"/*.log; do
+            [ -f "$f" ] && echo "=== $(basename "$f") ===" && tail -20 "$f"
+        done
+    fi
+}
+
+# ── help ──────────────────────────────────────────────────────────────────────
 cmd_help() {
     cat << EOF
-Harness Engineering v$VERSION - Agent-first Repository Harness
 
-核心理念: "Humans steer. Agents execute."
+Harness Engineering v$VERSION
+"Humans steer. Agents execute."
 
-用法: harness <command> [options]
+SETUP
+  init                              Generate CLAUDE.md, AGENTS.md, .harness/docs/
 
-核心命令:
-  init                              初始化项目结构
-  plan create <title> <desc>        创建执行计划
-  plan add-task <id> <title> <desc> 添加任务到计划
-  run [plan_id]                     启动 agent 主循环
+PLANNING
+  plan create <title> <desc>        Create execution plan (JSON + state machine)
+  plan list                         List active plans
 
-查询命令:
-  plan list                         列出所有执行计划
-  plan show <id>                    查看计划详情
-  task show <id>                    查看任务详情
+EXECUTION
+  run [plan_id]                     Start agent main loop (needs ANTHROPIC_API_KEY)
 
-质量命令:
-  check                             运行所有质量检查（lint + typecheck + test + docs）
-  check --only lint                 只跑 lint
-  check --only typecheck            只跑类型检查
-  check --only test                 只跑测试
-  check --only harness-docs         只检查文档完整性
-  check --skip test                 跳过测试
-  check --json                      输出 JSON 报告（适合 CI）
+QUALITY
+  check                             Run lint + typecheck + test + doc integrity
+  check --only <lint|test|typecheck|harness-docs>
+  check --skip <name>
+  check --json                      JSON output for CI
 
-工作流示例:
-  # 1. 初始化项目
-  harness init
+  audit                             Agent readability score (0-100)
+  audit --score                     Score only
 
-  # 2. 编写产品需求文档
-  vim .harness/docs/product/feature.md
+  garden                            Doc freshness + code duplication scan
+  garden --docs-only
+  garden --code-only
 
-  # 3. 创建执行计划
-  harness plan create "实现用户认证" "添加 JWT 认证系统"
+  golden-rules                      Code pattern violations
+  golden-rules --check
 
-  # 4. 添加任务（可选，agent 也可以自动分解）
-  harness plan add-task EP-xxx "实现登录接口" "POST /api/login"
+OBSERVABILITY
+  logs [--follow]                   View agent logs
 
-  # 5. 启动 agent 主循环
-  export ANTHROPIC_API_KEY=your_key
-  harness run
+WORKFLOW
+  1. harness init
+  2. Edit CLAUDE.md + .harness/docs/architecture/overview.md
+  3. harness plan create "Feature X" "Description"
+  4. Use Claude Code or Codex — they read CLAUDE.md/AGENTS.md automatically
+  5. harness check && harness audit   (before merging PR)
 
-  # Agent 会自动:
-  # - 读取仓库文档
-  # - 创建工作分支
-  # - 实现代码
-  # - 运行测试
-  # - 创建 PR
-  # - 响应 review
-
-更多信息: https://github.com/PIGU-PPPgu/harness-skill-v2
 EOF
 }
 
-# 显示版本
-cmd_version() {
-    echo "Harness Engineering v$VERSION"
-}
+cmd_version() { echo "Harness Engineering v$VERSION"; }
 
-# 主函数
+# ── main ──────────────────────────────────────────────────────────────────────
 main() {
-    if [ $# -eq 0 ]; then
-        cmd_help
-        exit 0
-    fi
-
+    [ $# -eq 0 ] && cmd_help && exit 0
     case "$1" in
-        init)
-            cmd_init
-            ;;
-        plan)
-            shift
-            case "${1:-}" in
-                create)
-                    shift
-                    cmd_plan_create "$@"
-                    ;;
-                add-task)
-                    shift
-                    cmd_plan_add_task "$@"
-                    ;;
-                list|show)
-                    log_warning "功能开发中"
-                    ;;
-                *)
-                    log_error "未知的 plan 命令: ${1:-}"
-                    exit 1
-                    ;;
-            esac
-            ;;
-        run)
-            shift
-            cmd_run "$@"
-            ;;
-        check)
-            shift
-            cmd_check "$@"
-            ;;
-        swarm)
-            shift
-            case "${1:-}" in
-                start)
-                    shift
-                    cmd_swarm_start "$@"
-                    ;;
-                status|stop|pause|resume|wait)
-                    log_warning "⚠️  'swarm' 命令已废弃，请使用 'harness run'"
-                    ;;
-                *)
-                    log_error "未知的 swarm 命令: ${1:-}"
-                    exit 1
-                    ;;
-            esac
-            ;;
-        audit)
-            cmd_audit
-            ;;
-        enforce)
-            shift
-            cmd_enforce "$@"
-            ;;
-        help|--help|-h)
-            cmd_help
-            ;;
-        version|--version|-v)
-            cmd_version
-            ;;
-        *)
-            log_error "未知命令: $1"
-            echo "使用 'harness help' 查看帮助"
-            exit 1
-            ;;
+        init)           cmd_init ;;
+        plan)           shift
+                        case "${1:-}" in
+                            create)   shift; cmd_plan_create "$@" ;;
+                            list)     cmd_plan_list ;;
+                            *)        error "Unknown plan command: ${1:-}" ;;
+                        esac ;;
+        run)            shift; cmd_run "$@" ;;
+        check)          shift; cmd_check "$@" ;;
+        audit)          shift; cmd_audit "$@" ;;
+        garden)         shift; cmd_garden "$@" ;;
+        golden-rules)   shift; cmd_golden_rules "$@" ;;
+        logs)           shift; cmd_logs "$@" ;;
+        help|--help|-h) cmd_help ;;
+        version|--version|-v) cmd_version ;;
+        # 兼容旧命令
+        swarm|tasks|agent|enforce|docs)
+                        warn "'$1' is deprecated. See: harness help" ;;
+        *)              error "Unknown command: $1. Run: harness help" ;;
     esac
 }
 

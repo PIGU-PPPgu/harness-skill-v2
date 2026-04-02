@@ -1,0 +1,874 @@
+#!/usr/bin/env bash
+# Agent Daemon - Continuous agent execution and monitoring
+# Automatically executes agent scripts and triggers next phases
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
+AGENT_DIR="$PROJECT_ROOT/.harness"
+STATE_DIR="$AGENT_DIR/state"
+LOCKS_DIR="$AGENT_DIR/locks"
+
+DAEMON_PID_FILE="$AGENT_DIR/daemon.pid"
+DAEMON_LOG="$AGENT_DIR/logs/daemon.log"
+DAEMON_LOCK_FILE="$STATE_DIR/daemon.lock"
+DAEMON_HEALTH_FILE="$STATE_DIR/daemon-heartbeat.json"
+DAEMON_ACTIVITY_FILE="$STATE_DIR/daemon-last-activity.txt"
+
+COMPONENT="agent-daemon"
+CHECK_INTERVAL=10
+SESSION_TIMEOUT_SECONDS=$((30 * 60))
+LOCK_WAIT_SECONDS=30
+HEALTH_STALE_SECONDS=60
+
+PROCESS_LOCK_FD=""
+PROCESS_LOCK_DIR=""
+
+usage() {
+  cat << EOF
+Agent Daemon - Autonomous Agent Execution
+
+Usage: agent-daemon <command>
+
+Commands:
+  start       Start the daemon (background)
+  stop        Stop the daemon
+  restart     Restart the daemon
+  status      Check daemon status
+  health      Print daemon health JSON
+  logs        Tail daemon logs
+
+The daemon will:
+  - Monitor .harness/sessions/ for new agent scripts
+  - Execute agents automatically using available AI CLI
+  - Detect completion signals (DESIGN_COMPLETE, BUILD_COMPLETE, etc.)
+  - Trigger next phase agents automatically
+  - Enforce a 30-minute execution timeout per agent
+  - Prevent multi-instance startup with a process lock
+  - Log all activities in JSON
+
+EOF
+}
+
+init_daemon() {
+  mkdir -p "$AGENT_DIR"/{sessions,logs} "$STATE_DIR" "$LOCKS_DIR"
+  touch "$DAEMON_LOG"
+}
+
+json_log() {
+  local level="$1"
+  local event_name="$2"
+  local message="$3"
+  local payload
+
+  payload="$(jq -cn \
+    --arg timestamp "$(date -Iseconds)" \
+    --arg level "$level" \
+    --arg component "$COMPONENT" \
+    --arg event "$event_name" \
+    --arg message "$message" \
+    --arg pid "$$" \
+    '{
+      timestamp: $timestamp,
+      level: $level,
+      component: $component,
+      event: $event,
+      message: $message,
+      pid: ($pid | tonumber)
+    }'
+  )"
+
+  printf '%s\n' "$payload" >> "$DAEMON_LOG"
+  if [[ -t 1 ]]; then
+    printf '%s\n' "$payload"
+  fi
+}
+
+info() { json_log "INFO" "$1" "${2:-$1}"; }
+success() { json_log "INFO" "$1" "${2:-$1}"; }
+warn() { json_log "WARN" "$1" "${2:-$1}"; }
+error() { json_log "ERROR" "$1" "${2:-$1}"; }
+
+write_json_file() {
+  local target="$1"
+  local content="$2"
+  local tmp_file="${target}.$$.$RANDOM.tmp"
+
+  printf '%s\n' "$content" > "$tmp_file"
+  mv "$tmp_file" "$target"
+}
+
+touch_activity() {
+  printf '%s\n' "$(date -Iseconds)" > "$DAEMON_ACTIVITY_FILE"
+}
+
+write_health() {
+  local state="$1"
+  local message="$2"
+  local activity_at=""
+
+  if [[ -f "$DAEMON_ACTIVITY_FILE" ]]; then
+    activity_at="$(cat "$DAEMON_ACTIVITY_FILE" 2>/dev/null || true)"
+  fi
+
+  write_json_file "$DAEMON_HEALTH_FILE" "$(jq -cn \
+    --arg component "$COMPONENT" \
+    --arg state "$state" \
+    --arg message "$message" \
+    --arg timestamp "$(date -Iseconds)" \
+    --arg heartbeat_epoch "$(date +%s)" \
+    --arg pid "$$" \
+    --arg activity_at "$activity_at" \
+    '{
+      component: $component,
+      state: $state,
+      message: $message,
+      timestamp: $timestamp,
+      heartbeat_epoch: ($heartbeat_epoch | tonumber),
+      pid: ($pid | tonumber),
+      last_activity_at: (if $activity_at == "" then null else $activity_at end)
+    }'
+  )"
+}
+
+sanitize_lock_name() {
+  printf '%s' "$1" | tr '/: ' '___' | tr -cs 'A-Za-z0-9._-' '_'
+}
+
+lock_file_for() {
+  local resource="$1"
+  printf '%s/%s.lock' "$LOCKS_DIR" "$(sanitize_lock_name "$resource")"
+}
+
+cleanup_stale_lock_dir() {
+  local lock_dir="$1"
+  local pid_file="$lock_dir/pid"
+
+  if [[ -f "$pid_file" ]]; then
+    local pid
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      rm -rf "$lock_dir"
+    fi
+  fi
+}
+
+acquire_dir_lock() {
+  local lock_file="$1"
+  local lock_dir="${lock_file}.d"
+  local deadline=$((SECONDS + LOCK_WAIT_SECONDS))
+
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    cleanup_stale_lock_dir "$lock_dir"
+    if (( SECONDS >= deadline )); then
+      return 1
+    fi
+    sleep 1
+  done
+
+  printf '%s\n' "$$" > "$lock_dir/pid"
+  PROCESS_LOCK_DIR="$lock_dir"
+  return 0
+}
+
+release_dir_lock() {
+  local lock_file="$1"
+  rm -rf "${lock_file}.d"
+}
+
+acquire_process_lock() {
+  local lock_file="$1"
+
+  if command -v flock >/dev/null 2>&1; then
+    exec {PROCESS_LOCK_FD}> "$lock_file"
+    if ! flock -n "$PROCESS_LOCK_FD"; then
+      exec {PROCESS_LOCK_FD}>&-
+      PROCESS_LOCK_FD=""
+      return 1
+    fi
+    printf '%s\n' "$$" > "$DAEMON_PID_FILE"
+    return 0
+  fi
+
+  if ! acquire_dir_lock "$lock_file"; then
+    return 1
+  fi
+
+  printf '%s\n' "$$" > "$DAEMON_PID_FILE"
+  return 0
+}
+
+release_process_lock() {
+  if [[ -n "$PROCESS_LOCK_FD" ]]; then
+    flock -u "$PROCESS_LOCK_FD" 2>/dev/null || true
+    exec {PROCESS_LOCK_FD}>&-
+    PROCESS_LOCK_FD=""
+  fi
+
+  if [[ -n "$PROCESS_LOCK_DIR" ]]; then
+    rm -rf "$PROCESS_LOCK_DIR"
+    PROCESS_LOCK_DIR=""
+  fi
+}
+
+with_path_lock() {
+  local resource="$1"
+  shift
+
+  local lock_file
+  lock_file="$(lock_file_for "$resource")"
+  local lock_dir="${lock_file}.d"
+  local deadline=$((SECONDS + LOCK_WAIT_SECONDS))
+
+  if command -v flock >/dev/null 2>&1; then
+    local lock_fd
+    exec {lock_fd}> "$lock_file"
+    if ! flock -w "$LOCK_WAIT_SECONDS" "$lock_fd"; then
+      exec {lock_fd}>&-
+      error "lock_timeout" "Timed out waiting for lock: $resource"
+      return 1
+    fi
+    "$@"
+    local rc=$?
+    flock -u "$lock_fd" 2>/dev/null || true
+    exec {lock_fd}>&-
+    return $rc
+  fi
+
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    cleanup_stale_lock_dir "$lock_dir"
+    if (( SECONDS >= deadline )); then
+      error "lock_timeout" "Timed out waiting for lock: $resource"
+      return 1
+    fi
+    sleep 1
+  done
+
+  printf '%s\n' "$$" > "$lock_dir/pid"
+  "$@"
+  local rc=$?
+  rm -rf "$lock_dir"
+  return $rc
+}
+
+is_running() {
+  if [[ -f "$DAEMON_PID_FILE" ]]; then
+    local pid
+    pid="$(cat "$DAEMON_PID_FILE" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    rm -f "$DAEMON_PID_FILE"
+  fi
+  return 1
+}
+
+detect_ai_cli() {
+  if command -v openclaw >/dev/null 2>&1; then
+    echo "openclaw"
+  elif command -v codex >/dev/null 2>&1; then
+    echo "codex"
+  elif command -v claude >/dev/null 2>&1; then
+    echo "claude"
+  else
+    echo "none"
+  fi
+}
+
+detect_timeout_cmd() {
+  if command -v timeout >/dev/null 2>&1; then
+    echo "timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    echo "gtimeout"
+  else
+    echo ""
+  fi
+}
+
+run_with_timeout() {
+  local seconds="$1"
+  local timeout_marker="$2"
+  local output_file="$3"
+  shift 3
+
+  rm -f "$timeout_marker"
+
+  local timeout_cmd
+  timeout_cmd="$(detect_timeout_cmd)"
+
+  if [[ -n "$timeout_cmd" ]]; then
+    "$timeout_cmd" --signal=TERM --kill-after=10 "$seconds" "$@" > "$output_file" 2>&1 || {
+      local rc=$?
+      if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+        printf 'timeout\n' > "$timeout_marker"
+      fi
+      return $rc
+    }
+    return 0
+  fi
+
+  "$@" > "$output_file" 2>&1 &
+  local command_pid=$!
+
+  (
+    sleep "$seconds"
+    if kill -0 "$command_pid" 2>/dev/null; then
+      printf 'timeout\n' > "$timeout_marker"
+      kill -TERM "$command_pid" 2>/dev/null || true
+      sleep 5
+      kill -KILL "$command_pid" 2>/dev/null || true
+    fi
+  ) &
+  local watchdog_pid=$!
+
+  local rc=0
+  if ! wait "$command_pid"; then
+    rc=$?
+  fi
+
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  return $rc
+}
+
+parse_completion_signal() {
+  local source_file="$1"
+
+  perl -ne '
+    while (/(DESIGN|BUILD|REVIEW|DOC)[ _-]*COMPLETE(?:\s*[:=-]?\s*(?:\[(APPROVED|CHANGES_REQUESTED)\]|(APPROVED|CHANGES_REQUESTED)|(PR\s*#?\s*([0-9]+))))?/ig) {
+      $signal = uc($1) . "_COMPLETE";
+      $review = uc($2 || $3 || "");
+      $pr = $5 || "";
+    }
+    END {
+      if ($signal) {
+        print join("\t", $signal, $pr, $review);
+        exit 0;
+      }
+      exit 1;
+    }
+  ' "$source_file"
+}
+
+update_session_running_locked() {
+  local session_file="$1"
+  local started_at="$2"
+  local tmp_file="${session_file}.$$.$RANDOM.tmp"
+
+  jq \
+    --arg started_at "$started_at" \
+    '.status = "running"
+      | .started_at = $started_at
+      | del(.failed_at, .completed_at, .finished_at, .timeout_at, .timed_out, .error, .exit_code, .completion_signal, .pr_number, .review_result)' \
+    "$session_file" > "$tmp_file"
+  mv "$tmp_file" "$session_file"
+}
+
+mark_session_running() {
+  local session_file="$1"
+  local started_at="$2"
+  with_path_lock "$session_file" update_session_running_locked "$session_file" "$started_at"
+}
+
+update_session_completed_locked() {
+  local session_file="$1"
+  local completed_at="$2"
+  local signal="$3"
+  local pr_number="$4"
+  local review_result="$5"
+  local tmp_file="${session_file}.$$.$RANDOM.tmp"
+
+  jq \
+    --arg completed_at "$completed_at" \
+    --arg signal "$signal" \
+    --arg pr_number "$pr_number" \
+    --arg review_result "$review_result" \
+    '.status = "completed"
+      | .completed_at = $completed_at
+      | .completion_signal = $signal
+      | .timed_out = false
+      | (if $pr_number == "" then del(.pr_number) else .pr_number = ($pr_number | tonumber) end)
+      | (if $review_result == "" then del(.review_result) else .review_result = $review_result end)' \
+    "$session_file" > "$tmp_file"
+  mv "$tmp_file" "$session_file"
+}
+
+mark_session_completed() {
+  local session_file="$1"
+  local completed_at="$2"
+  local signal="$3"
+  local pr_number="$4"
+  local review_result="$5"
+  with_path_lock "$session_file" update_session_completed_locked "$session_file" "$completed_at" "$signal" "$pr_number" "$review_result"
+}
+
+update_session_failed_locked() {
+  local session_file="$1"
+  local failed_at="$2"
+  local exit_code="$3"
+  local error_message="$4"
+  local timed_out="$5"
+  local tmp_file="${session_file}.$$.$RANDOM.tmp"
+
+  jq \
+    --arg failed_at "$failed_at" \
+    --arg error_message "$error_message" \
+    --argjson exit_code "$exit_code" \
+    --argjson timed_out "$timed_out" \
+    '.status = "failed"
+      | .failed_at = $failed_at
+      | .exit_code = $exit_code
+      | .timed_out = $timed_out
+      | .error = $error_message
+      | (if $timed_out then .timeout_at = $failed_at else del(.timeout_at) end)' \
+    "$session_file" > "$tmp_file"
+  mv "$tmp_file" "$session_file"
+}
+
+mark_session_failed() {
+  local session_file="$1"
+  local failed_at="$2"
+  local exit_code="$3"
+  local error_message="$4"
+  local timed_out="$5"
+  with_path_lock "$session_file" update_session_failed_locked "$session_file" "$failed_at" "$exit_code" "$error_message" "$timed_out"
+}
+
+update_session_unknown_locked() {
+  local session_file="$1"
+  local finished_at="$2"
+  local tmp_file="${session_file}.$$.$RANDOM.tmp"
+
+  jq \
+    --arg finished_at "$finished_at" \
+    '.status = "unknown"
+      | .finished_at = $finished_at
+      | .timed_out = false' \
+    "$session_file" > "$tmp_file"
+  mv "$tmp_file" "$session_file"
+}
+
+mark_session_unknown() {
+  local session_file="$1"
+  local finished_at="$2"
+  with_path_lock "$session_file" update_session_unknown_locked "$session_file" "$finished_at"
+}
+
+execute_agent() {
+  local script="$1"
+  local session_file="${script%.sh}.json"
+
+  if [[ ! -f "$session_file" ]]; then
+    warn "session_missing" "Session file not found: $session_file"
+    return 1
+  fi
+
+  local role
+  role="$(jq -r '.role // "unknown"' "$session_file" 2>/dev/null || echo "unknown")"
+  local task_id
+  task_id="$(jq -r '.task_id // "unknown"' "$session_file" 2>/dev/null || echo "unknown")"
+  local status
+  status="$(jq -r '.status // "unknown"' "$session_file" 2>/dev/null || echo "unknown")"
+
+  if [[ "$status" == "completed" ]]; then
+    return 0
+  fi
+
+  info "agent_execute_start" "Executing $role agent for task $task_id"
+  touch_activity
+  write_health "running" "Executing $role for $task_id"
+
+  mark_session_running "$session_file" "$(date -Iseconds)"
+
+  local output_file="$AGENT_DIR/logs/${task_id}-${role}.log"
+  local timeout_marker="$STATE_DIR/${task_id}-${role}.timeout"
+  local ai_cli
+  ai_cli="$(detect_ai_cli)"
+
+  if [[ "$ai_cli" == "none" ]]; then
+    error "agent_execute_error" "No AI CLI available for task $task_id"
+    mark_session_failed "$session_file" "$(date -Iseconds)" 127 "No AI CLI available" false
+    return 1
+  fi
+
+  local exit_code=0
+  case "$ai_cli" in
+    openclaw|codex|claude)
+      run_with_timeout "$SESSION_TIMEOUT_SECONDS" "$timeout_marker" "$output_file" bash "$script" || exit_code=$?
+      ;;
+    *)
+      run_with_timeout "$SESSION_TIMEOUT_SECONDS" "$timeout_marker" "$output_file" bash "$script" || exit_code=$?
+      ;;
+  esac
+
+  local timed_out=false
+  if [[ -f "$timeout_marker" ]]; then
+    timed_out=true
+    rm -f "$timeout_marker"
+  fi
+
+  local completion_data=""
+  if completion_data="$(parse_completion_signal "$output_file" 2>/dev/null)"; then
+    local completion_signal
+    completion_signal="$(printf '%s' "$completion_data" | cut -f1)"
+    local pr_number
+    pr_number="$(printf '%s' "$completion_data" | cut -f2)"
+    local review_result
+    review_result="$(printf '%s' "$completion_data" | cut -f3)"
+
+    success "agent_execute_complete" "$role agent completed for $task_id with $completion_signal"
+    mark_session_completed "$session_file" "$(date -Iseconds)" "$completion_signal" "$pr_number" "$review_result"
+    touch_activity
+    write_health "running" "Last completion: $task_id/$role -> $completion_signal"
+    trigger_next_phase "$task_id" "$role" "$completion_signal"
+    return 0
+  fi
+
+  if [[ "$timed_out" == "true" ]]; then
+    error "agent_execute_timeout" "$role agent timed out after ${SESSION_TIMEOUT_SECONDS}s for task $task_id"
+    mark_session_failed "$session_file" "$(date -Iseconds)" 124 "Agent execution timed out after ${SESSION_TIMEOUT_SECONDS} seconds" true
+    return 124
+  fi
+
+  if [[ $exit_code -ne 0 ]]; then
+    error "agent_execute_failed" "$role agent failed for task $task_id with exit code $exit_code"
+    mark_session_failed "$session_file" "$(date -Iseconds)" "$exit_code" "Agent exited with code $exit_code" false
+    return "$exit_code"
+  fi
+
+  warn "agent_execute_unknown" "$role agent finished for task $task_id without a completion signal"
+  mark_session_unknown "$session_file" "$(date -Iseconds)"
+  return 0
+}
+
+# Activate the next agent session for a task
+activate_next_session() {
+  local task_id="$1"
+  local next_role="$2"
+  local session_file="$AGENT_DIR/sessions/${task_id}-${next_role}.json"
+
+  if [[ ! -f "$session_file" ]]; then
+    warn "phase_next_missing" "No session file for $next_role ($task_id); skipping auto-trigger"
+    return 0
+  fi
+
+  local current_status
+  current_status="$(jq -r '.status // "unknown"' "$session_file" 2>/dev/null || echo "unknown")"
+
+  if [[ "$current_status" == "active" || "$current_status" == "running" ]]; then
+    info "phase_next_skip" "$next_role already $current_status for $task_id"
+    return 0
+  fi
+
+  local tmp_file="${session_file}.$$.$RANDOM.tmp"
+  jq --arg ts "$(date -Iseconds)" \
+    '.status = "active" | .triggered_at = $ts | del(.started_at, .completed_at, .failed_at, .exit_code, .error)' \
+    "$session_file" > "$tmp_file" && mv "$tmp_file" "$session_file"
+
+  info "phase_next_activated" "Activated $next_role agent for task $task_id"
+}
+
+# Notify human via feishu/log when escalation needed
+notify_escalation() {
+  local task_id="$1"
+  local role="$2"
+  local reason="$3"
+
+  local msg="🚨 Agent Swarm 需要人工介入\n任务: $task_id\nAgent: $role\n原因: $reason"
+  error "escalation_required" "$msg"
+
+  # Write escalation marker for external monitoring
+  local escalation_file="$STATE_DIR/${task_id}-${role}.escalation"
+  jq -cn \
+    --arg task_id "$task_id" \
+    --arg role "$role" \
+    --arg reason "$reason" \
+    --arg ts "$(date -Iseconds)" \
+    '{task_id: $task_id, role: $role, reason: $reason, escalated_at: $ts}' \
+    > "$escalation_file"
+
+  # Try openclaw notify if available
+  if command -v openclaw &>/dev/null; then
+    openclaw message --channel feishu --message "$msg" 2>/dev/null || true
+  fi
+}
+
+# Retry a failed session with exponential backoff
+schedule_retry() {
+  local session_file="$1"
+  local task_id="$2"
+  local role="$3"
+
+  local retry_count
+  retry_count="$(jq -r '.retry_count // 0' "$session_file" 2>/dev/null || echo 0)"
+  local max_retries=3
+  local backoff_seconds
+
+  if (( retry_count >= max_retries )); then
+    error "agent_max_retries" "$role agent for $task_id failed $max_retries times — escalating"
+    notify_escalation "$task_id" "$role" "Failed $max_retries times consecutively"
+    return 0
+  fi
+
+  # Exponential backoff: 60s, 300s, 900s
+  local backoff_list=(60 300 900)
+  backoff_seconds="${backoff_list[$retry_count]:-900}"
+
+  local retry_at
+  retry_at="$(date -d "+${backoff_seconds} seconds" -Iseconds 2>/dev/null \
+    || date -v "+${backoff_seconds}S" -Iseconds 2>/dev/null \
+    || date -Iseconds)"
+
+  local tmp_file="${session_file}.$$.$RANDOM.tmp"
+  jq \
+    --arg ts "$(date -Iseconds)" \
+    --argjson retry_count "$((retry_count + 1))" \
+    --arg retry_at "$retry_at" \
+    '.status = "retry_pending"
+      | .retry_count = $retry_count
+      | .retry_at = $retry_at
+      | .last_failed_at = $ts' \
+    "$session_file" > "$tmp_file" && mv "$tmp_file" "$session_file"
+
+  warn "agent_retry_scheduled" "$role agent for $task_id will retry in ${backoff_seconds}s (attempt $((retry_count + 1))/$max_retries)"
+}
+
+trigger_next_phase() {
+  local task_id="$1"
+  local completed_role="$2"
+  local signal="$3"
+
+  info "phase_transition" "Task $task_id: $completed_role -> $signal"
+
+  case "$completed_role" in
+    design)
+      activate_next_session "$task_id" "builder"
+      ;;
+    builder)
+      activate_next_session "$task_id" "reviewer"
+      ;;
+    reviewer)
+      if [[ "$signal" == *"APPROVED"* ]]; then
+        activate_next_session "$task_id" "doc-gardener"
+      else
+        # Changes requested — re-activate builder
+        info "phase_review_changes" "Review requested changes for $task_id; re-activating builder"
+        activate_next_session "$task_id" "builder"
+      fi
+      ;;
+    doc-gardener)
+      success "task_complete" "Task $task_id fully completed 🎉"
+      # Cleanup worktree after full task completion
+      local worktree_bin
+      worktree_bin="$(dirname "$0")/agent-worktree"
+      if [[ -x "$worktree_bin" ]]; then
+        info "phase_cleanup" "Destroying worktree for $task_id..."
+        "$worktree_bin" destroy "$task_id" 2>/dev/null || true
+      fi
+      ;;
+  esac
+}
+
+cleanup_daemon() {
+  write_health "stopped" "Daemon stopped"
+  rm -f "$DAEMON_PID_FILE"
+  release_process_lock
+}
+
+daemon_loop() {
+  init_daemon
+
+  if ! acquire_process_lock "$DAEMON_LOCK_FILE"; then
+    warn "lock_held" "Daemon already running; refusing to start a second instance"
+    exit 1
+  fi
+
+  trap 'cleanup_daemon; exit 0' INT TERM EXIT
+
+  info "daemon_start" "Agent daemon started with PID $$"
+  touch_activity
+  write_health "running" "Daemon loop active"
+
+  while true; do
+    touch_activity
+    write_health "running" "Scanning session queue"
+
+    if [[ -d "$AGENT_DIR/sessions" ]]; then
+      for session_file in "$AGENT_DIR/sessions"/*.json; do
+        [[ -f "$session_file" ]] || continue
+
+        local status
+        status="$(jq -r '.status // "unknown"' "$session_file" 2>/dev/null || echo "unknown")"
+        local script="${session_file%.json}.sh"
+
+        if [[ "$status" == "active" && -f "$script" ]]; then
+          execute_agent "$script" || {
+            local exit_code=$?
+            # Schedule retry on failure (non-timeout)
+            if [[ $exit_code -ne 124 ]]; then
+              local role task_id
+              role="$(jq -r '.role // "unknown"' "$session_file" 2>/dev/null)"
+              task_id="$(jq -r '.task_id // "unknown"' "$session_file" 2>/dev/null)"
+              schedule_retry "$session_file" "$task_id" "$role"
+            fi
+          }
+        elif [[ "$status" == "retry_pending" ]]; then
+          # Check if backoff window has passed
+          local retry_at
+          retry_at="$(jq -r '.retry_at // ""' "$session_file" 2>/dev/null || echo "")"
+          local now
+          now="$(date -Iseconds)"
+          if [[ -z "$retry_at" || "$now" > "$retry_at" ]]; then
+            local tmp_file="${session_file}.$$.$RANDOM.tmp"
+            jq '.status = "active"' "$session_file" > "$tmp_file" && mv "$tmp_file" "$session_file"
+            info "agent_retry_ready" "Retry window passed, re-activating $(jq -r '.role' "$session_file" 2>/dev/null)"
+          fi
+        fi
+      done
+    fi
+
+    sleep "$CHECK_INTERVAL"
+  done
+}
+
+cmd_start() {
+  init_daemon
+
+  if is_running; then
+    warn "daemon_running" "Daemon already running with PID $(cat "$DAEMON_PID_FILE")"
+    return 0
+  fi
+
+  info "daemon_boot" "Starting agent daemon"
+  nohup bash "$0" _daemon_loop >/dev/null 2>&1 &
+  local pid=$!
+
+  sleep 1
+
+  if kill -0 "$pid" 2>/dev/null; then
+    success "daemon_started" "Daemon started with PID $pid"
+    return 0
+  fi
+
+  error "daemon_start_failed" "Failed to start daemon"
+  return 1
+}
+
+cmd_stop() {
+  if ! is_running; then
+    warn "daemon_not_running" "Daemon not running"
+    return 0
+  fi
+
+  local pid
+  pid="$(cat "$DAEMON_PID_FILE")"
+  info "daemon_stop" "Stopping daemon PID $pid"
+
+  kill "$pid" 2>/dev/null || true
+
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null && (( waited < 10 )); do
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+
+  rm -f "$DAEMON_PID_FILE"
+  write_health "stopped" "Daemon stopped by command"
+  success "daemon_stopped" "Daemon stopped"
+}
+
+cmd_restart() {
+  cmd_stop
+  sleep 1
+  cmd_start
+}
+
+cmd_status() {
+  if ! is_running; then
+    warn "daemon_status" "Daemon not running"
+    return 1
+  fi
+
+  local pid
+  pid="$(cat "$DAEMON_PID_FILE")"
+  local status_message="Daemon running with PID $pid"
+
+  if [[ -f "$DAEMON_HEALTH_FILE" ]]; then
+    local heartbeat_epoch
+    heartbeat_epoch="$(jq -r '.heartbeat_epoch // 0' "$DAEMON_HEALTH_FILE" 2>/dev/null || echo 0)"
+    local age=$(( $(date +%s) - heartbeat_epoch ))
+    if (( age > HEALTH_STALE_SECONDS )); then
+      warn "daemon_status" "$status_message (health stale: ${age}s)"
+      return 1
+    fi
+  fi
+
+  success "daemon_status" "$status_message"
+}
+
+cmd_health() {
+  if [[ ! -f "$DAEMON_HEALTH_FILE" ]]; then
+    error "daemon_health_missing" "No daemon health file found"
+    return 1
+  fi
+
+  cat "$DAEMON_HEALTH_FILE"
+}
+
+cmd_logs() {
+  if [[ ! -f "$DAEMON_LOG" ]]; then
+    warn "daemon_logs_missing" "No daemon logs found"
+    return 1
+  fi
+
+  tail -f "$DAEMON_LOG"
+}
+
+main() {
+  if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+  fi
+
+  local command="$1"
+  shift || true
+
+  case "$command" in
+    start)
+      cmd_start
+      ;;
+    stop)
+      cmd_stop
+      ;;
+    restart)
+      cmd_restart
+      ;;
+    status)
+      cmd_status
+      ;;
+    health)
+      cmd_health
+      ;;
+    logs)
+      cmd_logs
+      ;;
+    _daemon_loop)
+      daemon_loop
+      ;;
+    -h|--help|help)
+      usage
+      ;;
+    *)
+      error "daemon_usage_error" "Unknown command: $command"
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
